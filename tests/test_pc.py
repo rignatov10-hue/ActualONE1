@@ -16,6 +16,7 @@ from standalone.pc import PCError
 def isolated_skills(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("ANALYST_SKILLS_DIR", str(tmp_path / "no-skills"))
     monkeypatch.delenv("ANALYST_PC_TOOLS", raising=False)
+    monkeypatch.delenv("ANALYST_PC_CONFIRM", raising=False)
 
 
 @pytest.fixture()
@@ -129,3 +130,42 @@ def test_write_file_size_limit(conv: memory.Conversation, monkeypatch: pytest.Mo
 def test_pc_error_class():
     with pytest.raises(PCError):
         raise PCError("test")
+
+
+def test_confirm_mode_default_ask():
+    assert pc.confirm_mode() == "ask"
+    pc.set_confirm_mode(True)
+    assert pc.confirm_mode() == "auto"
+    pc.set_confirm_mode(False)
+    assert pc.confirm_mode() == "ask"
+
+
+def test_auto_confirm_returns_approved(conv: memory.Conversation, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("ANALYST_PC_CONFIRM", "1")
+    called: list[str] = []
+    conv.approval_hook = called.append
+    payload = json.loads(
+        agent_mod.execute_tool(conv, {"name": "request_approval", "arguments": {"question": "delete X?"}})
+    )
+    assert payload["approved"] is True
+    assert payload["auto"] is True
+    assert not called
+
+
+def test_strict_mode_skips_result(conv: memory.Conversation, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.delenv("ANALYST_PC_CONFIRM", raising=False)
+    payload = json.loads(
+        agent_mod.execute_tool(conv, {"name": "request_approval", "arguments": {"question": "delete X?"}})
+    )
+    assert payload["approved"] is False
+
+
+def test_auto_section_used(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("ANALYST_PC_TOOLS", "1")
+    monkeypatch.delenv("ANALYST_PC_CONFIRM", raising=False)
+    strict, _ = agent_mod._system_state()
+    assert "disabled confirmation prompts" not in strict
+    monkeypatch.setenv("ANALYST_PC_CONFIRM", "1")
+    auto, schemas = agent_mod._system_state()
+    assert "disabled confirmation prompts" in auto
+    assert "run_shell" in {schema["name"] for schema in schemas}

@@ -238,10 +238,16 @@ class SettingsFrame(ttk.Frame):
             self,
             text="О П К // Разрешить управление этим ПК (команды, файлы, запуск VM; журнал: pc_log.jsonl)",
             variable=self.pc_var,
-        ).grid(row=google_row + 2, column=0, columnspan=3, sticky=W, pady=6)
+        ).grid(row=google_row + 2, column=0, columnspan=3, sticky=W, pady=(6, 0))
+        self.no_confirm_var = tk.BooleanVar(value=str(stored.get("pc_no_confirm")) == "1")
+        ttk.Checkbutton(
+            self,
+            text="БЕЗ ПОДТВЕРЖДЕНИЙ // выполнять действия сразу (авто-Да, всё в журнале)",
+            variable=self.no_confirm_var,
+        ).grid(row=google_row + 3, column=0, columnspan=3, sticky=W, pady=(2, 6))
 
         start = ttk.Button(self, text=">>  ЗАПУСТИТЬ ЧАТ", style="Accent.TButton", command=self._start)
-        start.grid(row=google_row + 3, column=0, columnspan=3, pady=(18, 8))
+        start.grid(row=google_row + 4, column=0, columnspan=3, pady=(18, 8))
         self.columnconfigure(1, weight=1)
         self._update_hint()
 
@@ -310,8 +316,10 @@ class SettingsFrame(ttk.Frame):
         from . import pc as pc_mod
 
         pc_mod.set_enabled(bool(self.pc_var.get()))
+        pc_mod.set_confirm_mode(bool(self.no_confirm_var.get()))
         config = self.values()
         config["pc_tools"] = "1" if self.pc_var.get() else ""
+        config["pc_no_confirm"] = "1" if self.no_confirm_var.get() else ""
         save_config(config)
         try:
             client = make_client(config)

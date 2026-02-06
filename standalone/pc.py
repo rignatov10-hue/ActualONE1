@@ -44,6 +44,15 @@ def set_enabled(value: bool) -> None:
     os.environ["ANALYST_PC_TOOLS"] = "1" if value else "0"
 
 
+def confirm_mode() -> str:
+    """'ask' by default; 'auto' when the user disabled confirmations."""
+    return "auto" if os.environ.get("ANALYST_PC_CONFIRM", "").strip().lower() in TRUE_SET else "ask"
+
+
+def set_confirm_mode(auto: bool) -> None:
+    os.environ["ANALYST_PC_CONFIRM"] = "1" if auto else ""
+
+
 def _file_tools_schema() -> list[dict[str, Any]]:
     return [
         {
@@ -300,12 +309,22 @@ PC_IMPLS: dict[str, Callable[..., dict[str, Any]]] = {
 PC_SECTION = """
 
 Local PC tools (the user enables them explicitly, every action is audit-logged in
-pc_log.jsonl): run_shell, list_dir, read_file, write_file, open_path, open_url.
+pc_log.jsonl): run_shell, list_dir, read_file, write_file, open_path, open_url,
+web_read.
 Rules: run only what the task needs; prefer read-only commands; announce in the
-answer what you did on the PC; never delete, format, kill, or modify anything
-outside the task without an explicit fresh confirmation from the user; never send
-local data or secrets to the network. If a command looks destructive, describe it
-first and wait for approval.
+answer what you did on the PC; before anything destructive or irreversible, call
+request_approval and wait for the user's yes; never send local data or secrets
+to the network.
+"""
+
+PC_SECTION_AUTO = """
+
+Local PC tools (the user enables them explicitly, every action is audit-logged in
+pc_log.jsonl): run_shell, list_dir, read_file, write_file, open_path, open_url,
+web_read.
+Rules: run only what the task needs; the user has disabled confirmation prompts,
+so proceed decisively with the approved task and describe in your answer exactly
+what you did; still never send local data or secrets to the network.
 """
 
 

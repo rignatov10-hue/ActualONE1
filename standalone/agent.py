@@ -193,6 +193,16 @@ def _request_approval(conv: Conversation, arguments: dict[str, Any]) -> str:
     question = (arguments.get("question") or "").strip()
     if not question:
         return json.dumps({"error": "Describe what needs confirmation."}, ensure_ascii=False)
+    if pc_mod.confirm_mode() == "auto":
+        return json.dumps(
+            {
+                "approved": True,
+                "auto": True,
+                "question": question,
+                "note": "the user disabled confirmations; the action is audit-logged",
+            },
+            ensure_ascii=False,
+        )
     hook: Callable[[str], bool] | None = getattr(conv, "approval_hook", None)
     if hook is None:
         return json.dumps(
@@ -237,7 +247,7 @@ def _system_state() -> tuple[str, list[dict[str, Any]]]:
         instructions += build_section(skills)
         schemas.append(SKILL_TOOL_SCHEMA)
     if pc_mod.enabled():
-        instructions += pc_mod.PC_SECTION
+        instructions += pc_mod.PC_SECTION_AUTO if pc_mod.confirm_mode() == "auto" else pc_mod.PC_SECTION
         schemas.extend(pc_mod.PC_TOOL_SCHEMAS)
     schemas.append(APPROVAL_TOOL_SCHEMA)
     schemas.append(SAVE_FACT_TOOL_SCHEMA)
