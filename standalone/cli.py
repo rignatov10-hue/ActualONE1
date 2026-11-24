@@ -41,6 +41,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("-b", "--base-url", help=f"Base URL; presets: {', '.join(sorted(OPENAI_COMPATIBLE_PRESETS))}.")
     parser.add_argument("-k", "--api-key", help="API key (otherwise the provider's environment variable).")
     parser.add_argument("--memory-dir", help=f"Where to keep memory (default {os.environ.get('ANALYST_MEMORY_DIR', './memory')}).")
+    parser.add_argument("--skills-dir", help=f"Folder with skill files (default {os.environ.get('ANALYST_SKILLS_DIR', '<project>/skills')}).")
     parser.add_argument("--list", action="store_true", help="List saved conversations and exit.")
     parser.add_argument("-e", "--env-file", help="Optional .env file to load before anything else.")
     return parser
@@ -70,6 +71,9 @@ def main(argv: list[str] | None = None) -> int:
     elif os.path.exists(".env"):
         _load_env_file(".env")
 
+    if args.skills_dir:
+        os.environ["ANALYST_SKILLS_DIR"] = args.skills_dir
+
     if args.list:
         saved = list_conversations(args.memory_dir)
         print("Saved conversations:", ", ".join(saved) if saved else "(none yet)")
@@ -84,6 +88,12 @@ def main(argv: list[str] | None = None) -> int:
     except Exception as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 2
+
+    from .skills import discover_skills
+
+    skills = discover_skills()
+    if skills:
+        print("Skills available:", ", ".join(skill.name for skill in skills))
 
     root = args.memory_dir or os.environ.get("ANALYST_MEMORY_DIR") or None
     conv = Conversation(args.conversation, root).load()

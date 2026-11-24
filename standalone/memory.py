@@ -34,9 +34,9 @@ def safe_name(name: str) -> str:
 class Conversation:
     """One named conversation: its message history and its loaded dataset."""
 
-    def __init__(self, name: str, root: Path | None = None) -> None:
+    def __init__(self, name: str, root: Path | str | None = None) -> None:
         self.name = safe_name(name)
-        self.root = (root or MEMORY_ROOT).resolve()
+        self.root = Path(root or MEMORY_ROOT).resolve()
         self.messages: list[dict[str, Any]] = []
         self.dataset: Dataset | None = None
         self.full: pd.DataFrame | None = None

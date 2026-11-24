@@ -46,6 +46,33 @@ exe. Скопируйте их вместе с exe — перенесёте и �
 Вместо EXE можно запускать без сборки: `python gui_entry.py` из папки проекта
 (нужен `pip install pandas pyarrow openpyxl`).
 
+**Навыки.** Справа от кнопки Google есть кнопка **«Папка навыков»**: она
+открывает папку `skills` и при первом запуске создаёт в ней пример. Каждый
+навык — текстовый файл (подробности ниже в разделе [Навыки](#skills-user-loadable-instructions)).
+Агент подхватывает навыки автоматически, менять код не нужно.
+
+## Skills (user-loadable instructions)
+
+You can extend the agent with **skills** - plain Markdown files, no code. A
+skill is either a folder in `skills/` containing a `SKILL.md` (a front-matter
+block with `name` and `description`, then instructions) or a single `.md` file
+directly inside `skills/`. Skills are discovered live at every turn: drop a
+file in, ask the next question, and the agent already knows it. A `load_skill`
+tool lets the model read a skill's full text when the task matches it, and
+saying "use the skill X" enforces it. Skills may define formatting, domain
+terminology, report templates and checklists - nothing is ever executed.
+
+```
+skills/
+  report-format/      example shipped with the project
+    SKILL.md          front matter (name, description) + instructions
+  my-glossary.md      a one-file skill is fine too
+```
+
+The folder lives next to the program: for the EXE that is the EXE's folder
+(create `skills` next to `Analyst.exe`), for a source checkout it is the
+project root. Override with `ANALYST_SKILLS_DIR` or `--skills-dir` in the CLI.
+
 ## Standalone (no Mistral required)
 
 Everything lives in the project folder, so the whole directory is portable:

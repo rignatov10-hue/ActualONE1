@@ -21,6 +21,11 @@ from standalone import memory
 from standalone import tools
 
 
+@pytest.fixture(autouse=True)
+def isolated_skills(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("ANALYST_SKILLS_DIR", str(tmp_path / "no-skills"))
+
+
 def make_frame() -> pd.DataFrame:
     return pd.DataFrame(
         {
@@ -138,6 +143,13 @@ def test_safe_name():
     assert "/" not in cleaned and ".." not in cleaned and cleaned.strip("_") == "bad_name"
 
 
+def test_conversation_accepts_str_root(tmp_path: Path):
+    conv = memory.Conversation("strroot", str(tmp_path / "mem"))
+    conv.append({"role": "user", "content": "hi"})
+    fresh = memory.Conversation("strroot", str(tmp_path / "mem")).load()
+    assert fresh.messages[0]["content"] == "hi"
+
+
 # --------------------------------------------------------------------------- providers
 
 
@@ -183,6 +195,42 @@ def mock_server():
     thread.start()
     yield f"http://127.0.0.1:{server.server_port}"
     server.shutdown()
+
+
+def test_skills_end_to_end_with_loop(mock_server: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    skills_dir = tmp_path / "skills"
+    monkeypatch.setenv("ANALYST_SKILLS_DIR", str(skills_dir))
+    skills_dir.mkdir()
+    (skills_dir / "check").mkdir()
+    (skills_dir / "check" / "SKILL.md").write_text(
+        "---\nname: check\ndescription: test skill\n---\nAnswer only with the word VERIFIED.\n",
+        encoding="utf-8",
+    )
+    client = llm.OpenAICompatClient("test-model", mock_server, "test-key")
+    conv = memory.Conversation("skills", tmp_path)
+    MockHandler.script = [
+        {
+            "choices": [
+                {
+                    "message": {
+                        "content": None,
+                        "tool_calls": [
+                            {"id": "s1", "function": {"name": "load_skill", "arguments": json.dumps({"name": "check"})}}
+                        ],
+                    }
+                }
+            ]
+        },
+        {"choices": [{"message": {"content": "VERIFIED"}}]},
+    ]
+    answer = agent_mod.run_turn(conv, client, "Enable the check skill.")
+    assert answer == "VERIFIED"
+    completions = [request for request in MockHandler.requests if request["path"].endswith("/chat/completions")]
+    tool_names = [tool["function"]["name"] for tool in completions[0]["body"]["tools"]]
+    assert tool_names[-1] == "load_skill"
+    assert "check: test skill" in completions[0]["body"]["messages"][0]["content"]
+    tool_messages = [message for request in completions for message in request["body"]["messages"] if message.get("role") == "tool"]
+    assert "VERIFIED" in tool_messages[0]["content"]
 
 
 def test_openai_loop_end_to_end_and_memory(mock_server: str, tmp_path: Path):

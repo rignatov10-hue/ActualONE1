@@ -9,7 +9,9 @@ folder it is placed in, so it is fully portable.
 from __future__ import annotations
 
 import json
+import os
 import queue
+import subprocess
 import sys
 import threading
 from pathlib import Path
@@ -126,6 +128,11 @@ class SettingsFrame(ttk.Frame):
         help_button = ttk.Button(self, text="Как подключить?", command=self._show_google_help)
         help_button.grid(row=google_row + 1, column=0, sticky=W, pady=3)
 
+        self.skills_status = ttk.Label(self, text=self._skills_status_text(), foreground="#555")
+        self.skills_status.grid(row=google_row + 1, column=1, sticky=W, pady=3)
+        skills_button = ttk.Button(self, text="Папка навыков", command=self._open_skills_folder)
+        skills_button.grid(row=google_row + 1, column=2, sticky=W, pady=3)
+
         start = ttk.Button(self, text="Запустить чат", command=self._start)
         start.grid(row=google_row + 2, column=0, columnspan=3, pady=(14, 0))
         self.columnconfigure(1, weight=1)
@@ -169,6 +176,24 @@ class SettingsFrame(ttk.Frame):
             self.refresh_google_status()
             return
         self.after(1500, self._poll_google_token)
+
+    def _skills_status_text(self) -> str:
+        from .skills import discover_skills
+
+        skills = discover_skills()
+        return f"Навыки: {len(skills)} (папка skills рядом с программой)"
+
+    def _open_skills_folder(self) -> None:
+        from .skills import ensure_example_skill
+
+        root = ensure_example_skill()
+        try:
+            if hasattr(os, "startfile"):
+                os.startfile(root)  # type: ignore[attr-defined]
+            else:
+                subprocess.Popen(["xdg-open", str(root)])
+        except Exception:
+            messagebox.showinfo("Навыки", f"Папка навыков:\n{root}")
 
     def _update_hint(self) -> None:
         provider = self.vars["provider"].get().strip()

@@ -7,6 +7,14 @@ from typing import Any
 
 from .llm import AnthropicClient, OpenAICompatClient
 from .memory import Conversation
+from .skills import (
+    SKILL_TOOL_SCHEMA,
+    SkillError,
+    TOOL_NAME,
+    build_section,
+    discover_skills,
+    run_load_skill,
+)
 from .tools import TOOL_IMPLS, TOOL_SCHEMAS, ToolError, utc_now
 
 INSTRUCTIONS = """You are a conversational data analyst. The user gives you a data source - a
@@ -32,14 +40,33 @@ How to work:
 6. If a question mentions a column that does not exist, list available columns instead of
    guessing.
 
-Your only capabilities are the five fixed tools. You cannot run code, open a shell, edit files,
-or fetch the web. Stay within the tools and never promise otherwise.
+Your only capabilities are the five fixed tools plus load_skill for reading user skills. You
+cannot run code, open a shell, edit files, or fetch the web. Stay within the tools and never
+promise otherwise.
 """
+
+
+def _system_state() -> tuple[str, list[dict[str, Any]]]:
+    """Instructions and tool schemas for this turn: skills are re-read every turn."""
+    try:
+        skills = discover_skills()
+    except OSError:
+        skills = []
+    if not skills:
+        return INSTRUCTIONS, list(TOOL_SCHEMAS)
+    return INSTRUCTIONS + build_section(skills), list(TOOL_SCHEMAS) + [SKILL_TOOL_SCHEMA]
 
 
 def execute_tool(conv: Conversation, call: dict[str, Any]) -> str:
     name = call.get("name", "")
     arguments = call.get("arguments") or {}
+    if name == TOOL_NAME:
+        try:
+            return json.dumps(run_load_skill(arguments.get("name", "")), ensure_ascii=False, default=str)
+        except SkillError as exc:
+            return json.dumps({"error": str(exc)}, ensure_ascii=False)
+        except TypeError as exc:
+            return json.dumps({"error": f"Bad arguments for '{name}': {exc}."}, ensure_ascii=False)
     implementation = TOOL_IMPLS.get(name)
     if implementation is None:
         return json.dumps({"error": f"Unknown tool '{name}'."}, ensure_ascii=False)
@@ -55,9 +82,10 @@ def execute_tool(conv: Conversation, call: dict[str, Any]) -> str:
 def run_turn(conv: Conversation, client: Any, user_text: str, max_steps: int = 15) -> str:
     """One user turn: run the tool loop until the model produces a final answer."""
     conv.append({"role": "user", "content": user_text, "time": utc_now()})
+    instructions, schemas = _system_state()
     messages = list(conv.messages)
     for _ in range(max_steps):
-        response = client.complete(INSTRUCTIONS, messages, TOOL_SCHEMAS)
+        response = client.complete(instructions, messages, schemas)
         assistant: dict[str, Any] = {"role": "assistant", "content": response.get("content")}
         if response.get("tool_calls"):
             assistant["tool_calls"] = response["tool_calls"]
