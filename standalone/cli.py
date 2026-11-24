@@ -43,6 +43,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--memory-dir", help=f"Where to keep memory (default {os.environ.get('ANALYST_MEMORY_DIR', './memory')}).")
     parser.add_argument("--skills-dir", help=f"Folder with skill files (default {os.environ.get('ANALYST_SKILLS_DIR', '<project>/skills')}).")
     parser.add_argument("--pc", action="store_true", help="Enable local PC control tools for this session (audit: pc_log.jsonl).")
+    parser.add_argument("--jarvis", action="store_true", help="JARVIS voice mode instead of the text chat (voice deps optional).")
     parser.add_argument("--list", action="store_true", help="List saved conversations and exit.")
     parser.add_argument("-e", "--env-file", help="Optional .env file to load before anything else.")
     return parser
@@ -102,6 +103,11 @@ def main(argv: list[str] | None = None) -> int:
 
     root = args.memory_dir or os.environ.get("ANALYST_MEMORY_DIR") or None
     conv = Conversation(args.conversation, root).load()
+    if args.jarvis:
+        from .jarvis import terminal_loop
+
+        terminal_loop(client, conv)
+        return 0
     chat(conv, client)
     return 0
 

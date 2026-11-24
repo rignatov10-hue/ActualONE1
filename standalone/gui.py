@@ -245,9 +245,15 @@ class SettingsFrame(ttk.Frame):
             text="БЕЗ ПОДТВЕРЖДЕНИЙ // выполнять действия сразу (авто-Да, всё в журнале)",
             variable=self.no_confirm_var,
         ).grid(row=google_row + 3, column=0, columnspan=3, sticky=W, pady=(2, 6))
+        self.jarvis_var = tk.BooleanVar(value=str(stored.get("jarvis")) == "1")
+        ttk.Checkbutton(
+            self,
+            text="РЕЖИМ JARVIS // голосовой ассистент (микрофон, озвучка, команды ПК)",
+            variable=self.jarvis_var,
+        ).grid(row=google_row + 4, column=0, columnspan=3, sticky=W, pady=(2, 6))
 
-        start = ttk.Button(self, text=">>  ЗАПУСТИТЬ ЧАТ", style="Accent.TButton", command=self._start)
-        start.grid(row=google_row + 4, column=0, columnspan=3, pady=(18, 8))
+        start = ttk.Button(self, text=">>  ЗАПУСТИТЬ", style="Accent.TButton", command=self._start)
+        start.grid(row=google_row + 5, column=0, columnspan=3, pady=(18, 8))
         self.columnconfigure(1, weight=1)
         self._update_hint()
 
@@ -320,13 +326,14 @@ class SettingsFrame(ttk.Frame):
         config = self.values()
         config["pc_tools"] = "1" if self.pc_var.get() else ""
         config["pc_no_confirm"] = "1" if self.no_confirm_var.get() else ""
+        config["jarvis"] = "1" if self.jarvis_var.get() else ""
         save_config(config)
         try:
             client = make_client(config)
         except Exception as exc:
             messagebox.showerror("Аналитик", f"Модель не настроена:\n\n{exc}")
             return
-        self.on_start(client, config["conversation"])
+        self.on_start(client, config["conversation"], bool(self.jarvis_var.get()))
 
     def refresh_google_status(self) -> None:
         self.google_status["text"] = self._google_status_text()
@@ -493,6 +500,155 @@ class ChatWindow(ttk.Frame):
         self._set_busy(False)
 
 
+class JarvisWindow(ttk.Frame):
+    """JARVIS mode: voice assistant with the same model and the same memory."""
+
+    def __init__(self, master: Tk, client, conversation) -> None:
+        super().__init__(master, padding=10)
+        self.master = master
+        self.client = client
+        self.conversation = conversation
+        self.queue: "queue.Queue[tuple[str, str]]" = queue.Queue()
+        self.stop_event = threading.Event()
+        self.mic_thread: threading.Thread | None = None
+        self.listener = None
+
+        from .jarvis import Assistant
+
+        self.assistant = Assistant(
+            client,
+            conversation,
+            emit=lambda who, text: self.queue.put((who, text)),
+        )
+
+        header = ttk.Label(
+            self,
+            text=f">> ДЖАРВИС   //   модель та же, память: {conversation.name}",
+            style="Sub.TLabel",
+        )
+        header.pack(anchor=W, pady=(0, 4))
+
+        console = ttk.Frame(self)
+        console.pack(fill=BOTH, expand=True, pady=4)
+        self.log = tk.Text(
+            console,
+            wrap="word",
+            state=DISABLED,
+            width=72,
+            height=18,
+            background=FIELD,
+            foreground=AGENT_TXT,
+            insertbackground=FG,
+            font=FONT_AGENT,
+            relief="flat",
+            borderwidth=0,
+            highlightthickness=1,
+            highlightbackground=LINE,
+            highlightcolor=FG,
+            selectbackground=FG,
+            selectforeground="#060608",
+            spacing1=2,
+            spacing3=4,
+        )
+        self.log.pack(side=LEFT, fill=BOTH, expand=True)
+        scroll = ttk.Scrollbar(console, command=self.log.yview)
+        scroll.pack(side=LEFT, fill=Y)
+        self.log.configure(yscrollcommand=scroll.set)
+
+        bottom = ttk.Frame(self)
+        bottom.pack(fill=X, side=BOTTOM)
+        self.entry = ttk.Entry(bottom, font=FONT_MAIN)
+        self.entry.pack(side=LEFT, fill=X, expand=True, padx=(0, 6), ipady=2)
+        self.entry.bind("<Return>", self._send)
+        self.send = ttk.Button(bottom, text="КОМАНДА", style="Accent.TButton", command=self._send)
+        self.send.pack(side=LEFT)
+        self.mic_btn = ttk.Button(bottom, text="МИКРОФОН: ВКЛ", command=self._toggle_mic)
+        self.mic_btn.pack(side=LEFT, padx=(6, 0))
+        ttk.Button(bottom, text="НАСТРОЙКИ", command=self._open_settings).pack(side=LEFT, padx=(6, 0))
+
+        self._append_line(
+            "Система",
+            "Джарвис понимает голосовые команды: «Джарвис, открой хром», «сделай скриншот», «громче», "
+            "«режим ожидания». Проблемы с микрофоном или озвучкой не мешают текстовым командам.",
+        )
+        self.after(100, self._poll)
+
+    def shutdown(self) -> None:
+        self.stop_event.set()
+
+    def _open_settings(self) -> None:
+        self.shutdown()
+        self.pack_forget()
+        app = self.master
+        if hasattr(app, "settings"):
+            app.settings.refresh_google_status()
+            app.settings.pack(fill=BOTH, expand=True)
+
+    # ---- UI helpers --------------------------------------------------------
+    def _append_line(self, who: str, text: str) -> None:
+        self.log.tag_configure("user", foreground=FG, font=FONT_USER)
+        self.log.tag_configure("agent", foreground=AGENT_TXT, font=FONT_AGENT)
+        self.log.tag_configure("sys", foreground=DIM, font=FONT_SMALL)
+        self.log.tag_configure("err", foreground=FG, background="#1c1c24", font=FONT_ERR)
+        tag = "err" if who == "Ошибка" else ("sys" if who == "Система" else "agent")
+        self.log["state"] = NORMAL
+        self.log.insert(END, f"[{who}] ", ("user" if who == "Вы" else tag))
+        self.log.insert(END, f"{text.strip()}\n\n", tag)
+        self.log.see(END)
+        self.log["state"] = DISABLED
+
+    # ---- input ---------------------------------------------------------------
+    def _send(self, event=None) -> None:
+        text = self.entry.get().strip()
+        if not text:
+            return
+        self.entry.delete(0, END)
+        self._append_line("Вы", text)
+
+        def work() -> None:
+            try:
+                self.assistant.handle(text)
+            except Exception as exc:
+                self.queue.put(("Ошибка", f"{type(exc).__name__}: {exc}"))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _toggle_mic(self) -> None:
+        from .jarvis import Listener, voice_loop
+
+        if self.mic_thread is not None:
+            self.stop_event.set()
+            self.mic_thread = None
+            self.mic_btn["text"] = "МИКРОФОН: ВКЛ"
+            self._append_line("Система", "Микрофон остановлен.")
+            return
+        listener = Listener()
+        if not listener.init():
+            self._append_line("Ошибка", f"Микрофон недоступен: {listener.reason}")
+            return
+        if listener.reason:
+            self._append_line("Система", listener.reason)
+        self.listener = listener
+        self.stop_event.clear()
+        self.mic_thread = threading.Thread(
+            target=voice_loop, args=(self.assistant, self.stop_event, listener), daemon=True
+        )
+        self.mic_thread.start()
+        self.mic_btn["text"] = "МИКРОФОН: ВЫКЛ (остановить)"
+
+    def _poll(self) -> None:
+        if self.mic_thread is not None and not self.mic_thread.is_alive():
+            self.mic_thread = None
+            self.mic_btn["text"] = "МИКРОФОН: ВКЛ"
+        while True:
+            try:
+                who, text = self.queue.get_nowait()
+            except queue.Empty:
+                break
+            self._append_line(who, text)
+        self.after(100, self._poll)
+
+
 class App(Tk):
     def __init__(self) -> None:
         super().__init__()
@@ -526,18 +682,25 @@ class App(Tk):
             pass
         messagebox.showerror("Сбой в программе", text[-1500:])
 
-    def _open_chat(self, client, conversation_name: str) -> None:
+    def _open_chat(self, client, conversation_name: str, jarvis: bool = False) -> None:
         from .memory import Conversation
 
         self.settings.pack_forget()
         conv = Conversation(conversation_name, app_dir() / "memory").load()
-        self.chat = ChatWindow(self, client, conv)
+        if jarvis:
+            self.chat = JarvisWindow(self, client, conv)
+            self.title("ДЖАРВИС // голосовой ассистент")
+        else:
+            self.chat = ChatWindow(self, client, conv)
         self.chat.pack(fill=BOTH, expand=True)
 
     def _back_to_settings(self) -> None:
         if self.chat is not None:
+            if isinstance(self.chat, JarvisWindow):
+                self.chat.shutdown()
             self.chat.pack_forget()
             self.chat = None
+        self.title("АНАЛИТИК ДАННЫХ // автономный агент")
         self.settings.refresh_google_status()
         self.settings.pack(fill=BOTH, expand=True)
 
