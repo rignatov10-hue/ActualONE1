@@ -44,9 +44,52 @@ ask questions in plain language; it answers with real numbers from your data.
 ```bash
 uv sync                      # install dependencies
 cp .env.example .env         # then paste a Mistral API key into .env
-uv run --env-file .env agents chat     # chat locally
+uv run --env-file .env python chat_local.py   # interactive chat, one session
 uv run pytest                # run the tool tests (no key needed)
 ```
+
+## Model providers
+
+The same agent can run on Mistral, a local model server, or third-party AI
+services. Choose with `ANALYST_PROVIDER` in `.env` and set the matching key:
+
+| `ANALYST_PROVIDER` | Model source | Key | Extra variable |
+| --- | --- | --- | --- |
+| `mistral` (default) | Mistral Cloud | `MISTRAL_API_KEY` | — |
+| `openai-compatible` | KoboldCpp, llama.cpp, LM Studio, OpenRouter, DeepSeek, vLLM | `OPENAI_API_KEY` (or the service's key under this name) | `ANALYST_LLM_BASE_URL` |
+| `openai` | OpenAI | `OPENAI_API_KEY` | — |
+| `anthropic` | Anthropic | `ANTHROPIC_API_KEY` | — |
+
+`ANALYST_MODEL` names the model at that provider (defaults: `mistral-medium-latest`,
+`gpt-4.1`, `claude-sonnet-4-5`, `local-model`). `ANALYST_LLM_BASE_URL` can also
+override the default endpoint of `mistral`/`openai`/`anthropic`.
+
+A model behind `openai-compatible` must support OpenAI-style tool/function
+calling (Qwen3 chat templates and recent llama.cpp builds do).
+
+`MISTRAL_API_KEY` is required in every mode: the Google Drive connector calls it
+even when the model itself is local or third-party.
+
+### Local model example (KoboldCpp)
+
+1. Start KoboldCpp with your GGUF model; it serves `http://127.0.0.1:5001/v1`.
+2. Put this in `.env`:
+
+```bash
+MISTRAL_API_KEY=...            # for the Google Drive connector
+ANALYST_PROVIDER=openai-compatible
+ANALYST_LLM_BASE_URL=http://127.0.0.1:5001/v1
+ANALYST_MODEL=my-local-model   # any name; the server usually ignores it
+OPENAI_API_KEY=local           # any non-empty value
+```
+
+3. Run `uv run --env-file .env python chat_local.py`.
+
+Without `ANALYST_PROVIDER`/`ANALYST_LLM_BASE_URL` the agent uses Mistral Cloud
+and `agents deploy` works as below.
+
+> A managed deployment on Mistral Cloud cannot reach a model on your machine:
+> the local-model mode is for `chat_local.py` / `agents serve` runs only.
 
 ## Deploy (mistral-managed)
 

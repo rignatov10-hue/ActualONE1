@@ -169,26 +169,36 @@ def _get_state(ctx: agents.ToolCallbackContext | None) -> SessionState:
 
 
 def _build_client():
-    from mistralai.client import Mistral
     from mistralai.workflows.client import get_mistral_client
+    from mistralai.workflows.core.auth import RunAs
 
-    try:
-        from mistralai.workflows.core.auth import RunAs
+    return get_mistral_client(run_as=RunAs.AUTO)
 
-        return get_mistral_client(run_as=RunAs.AUTO)
-    except Exception:
-        api_key = os.environ.get("MISTRAL_API_KEY")
-        if not api_key:
-            raise agents.ToolError(
-                "Could not authenticate to Google Drive. In a managed deployment this "
-                "should never happen; locally, set MISTRAL_API_KEY."
-            )
-        return Mistral(api_key=api_key)
+
+def _build_local_client():
+    from mistralai.client import Mistral
+
+    api_key = os.environ.get("MISTRAL_API_KEY")
+    if not api_key:
+        raise agents.ToolError(
+            "Could not authenticate to Google Drive. In a managed deployment this "
+            "should never happen; locally, set MISTRAL_API_KEY in the environment."
+        )
+    return Mistral(api_key=api_key)
 
 
 async def _drive_tool(tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+    from mistralai.workflows.exceptions import WorkflowError
+
     client = _build_client()
     try:
+        result = await client.beta.connectors.call_tool_async(
+            connector_id_or_name=_DRIVE_CONNECTOR,
+            tool_name=tool_name,
+            arguments=arguments,
+        )
+    except WorkflowError:
+        client = _build_local_client()
         result = await client.beta.connectors.call_tool_async(
             connector_id_or_name=_DRIVE_CONNECTOR,
             tool_name=tool_name,
@@ -681,20 +691,70 @@ or fetch the web. Stay within the tools and never promise otherwise.
 """
 
 
-agent = agents.Agent(
-    model="mistral-medium-latest",
-    name="drive-data-analyst",
-    description="Answers questions with real numbers from a CSV the user shares from Google Drive.",
-    instructions=INSTRUCTIONS,
-    tools=[
+_AGENT_KWARGS: dict[str, Any] = {
+    "name": "drive-data-analyst",
+    "description": "Answers questions with real numbers from a CSV the user shares from Google Drive.",
+    "instructions": INSTRUCTIONS,
+    "tools": [
         load_csv_from_drive,
         describe_columns,
         filter_rows,
         group_by_aggregate,
         reset_scope,
     ],
-    connectors=[agents.connector(_DRIVE_CONNECTOR)],
-)
+    "connectors": [agents.connector(_DRIVE_CONNECTOR)],
+}
+
+
+_DEFAULT_MISTRAL_MODEL = "mistral-medium-latest"
+
+
+def _build_agent() -> agents.Agent:
+    """Pick the model from the environment so the same agent runs on Mistral Cloud, a
+    local OpenAI-compatible server (KoboldCpp), OpenAI, Anthropic, or any OpenAI-compatible
+    service (OpenRouter, DeepSeek, vLLM, ...).
+
+    Environment variables:
+
+    - ``ANALYST_PROVIDER``: ``mistral`` (default), ``openai``, ``anthropic`` or
+      ``openai-compatible`` (KoboldCpp and similar local servers, OpenRouter, ...).
+    - ``ANALYST_MODEL``: the model name to request from that provider.
+    - ``ANALYST_LLM_BASE_URL``: endpoint for openai-compatible providers, or an override
+      of the default endpoint for mistral/openai/anthropic.
+    - API keys: ``MISTRAL_API_KEY`` (also needed for the Drive connector no matter the
+      model), ``OPENAI_API_KEY``, ``ANTHROPIC_API_KEY``.
+    """
+    model = os.environ.get("ANALYST_MODEL", "").strip()
+    base_url = os.environ.get("ANALYST_LLM_BASE_URL", "").strip()
+    provider = os.environ.get("ANALYST_PROVIDER", "").strip().lower()
+    if not provider:
+        provider = "openai-compatible" if base_url else "mistral"
+
+    if provider == "mistral" and not base_url:
+        return agents.Agent(model=model or _DEFAULT_MISTRAL_MODEL, **_AGENT_KWARGS)
+
+    from mistralai.vibe.harness.runtime.completion.providers.anthropic import (
+        AnthropicCompletionConfig,
+    )
+    from mistralai.vibe.harness.runtime.completion.providers.mistral import (
+        MistralCompletionConfig,
+    )
+    from mistralai.vibe.harness.runtime.completion.providers.openai import (
+        OpenAICompletionConfig,
+    )
+
+    if provider == "mistral":
+        completion = MistralCompletionConfig(model=model or _DEFAULT_MISTRAL_MODEL, base_url=base_url)
+    elif provider == "openai":
+        completion = OpenAICompletionConfig(model=model or "gpt-4.1", base_url=base_url or None)
+    elif provider == "anthropic":
+        completion = AnthropicCompletionConfig(model=model or "claude-sonnet-4-5", base_url=base_url or None)
+    else:
+        completion = OpenAICompletionConfig(model=model or "local-model", base_url=base_url)
+    return agents.Agent(model=completion.model, completion=completion, **_AGENT_KWARGS)
+
+
+agent = _build_agent()
 
 
 async def main() -> None:
