@@ -1,8 +1,100 @@
 # drive-data-analyst
 
-A conversational data analyst agent built with the Mistral Agents SDK
-(`mistralai-agents` 1.1). Give it a link to a CSV file in your Google Drive and
-ask questions in plain language; it answers with real numbers from your data.
+A conversational data analyst agent. Give it a CSV file and ask questions in
+plain language; it answers with real numbers from your data, remembers earlier
+turns, and never runs arbitrary code against the data (five fixed pandas
+tools - that is all).
+
+Two ways to run it:
+
+- **`standalone/` - fully autonomous, no Mistral anywhere.** The model is any
+  OpenAI-compatible service (KoboldCpp, Ollama, LM Studio, OpenAI, OpenRouter,
+  DeepSeek, Groq, vLLM...) or Anthropic; Google Drive is read directly from
+  Google (public files at once, private ones through your own Google OAuth
+  token); memory is local files you own. Copy this folder to your PC and it
+  works. See [Standalone](#standalone-no-mistral-required).
+- **`main.py` - the Mistral Agents SDK version** for a managed deployment on
+  Mistral Cloud (needs the Mistral connector + a paid plan). See
+  [Model providers](#model-providers) and [Deploy](#deploy-mistral-managed).
+
+## Standalone (no Mistral required)
+
+Everything lives in the project folder, so the whole directory is portable:
+
+```
+standalone/      the agent (tools, memory, LLM clients, CLI)
+memory/          created at first run: conversations + loaded datasets
+.env             your model provider settings
+```
+
+### 1. Install (any PC, Python 3.10+)
+
+```bash
+uv sync                      # or: pip install pandas pyarrow openpyxl
+```
+
+### 2. Pick the model with .env (one provider at a time)
+
+```bash
+# a) local model in KoboldCpp (http://127.0.0.1:5001/v1)
+ANALYST_PROVIDER=kobold
+ANALYST_MODEL=my-model                 # any name; Kobold ignores it
+OPENAI_API_KEY=local
+
+# b) a paid service, e.g. OpenRouter:
+# ANALYST_PROVIDER=openrouter
+# ANALYST_MODEL=openai/gpt-4.1
+# OPENAI_API_KEY=sk-or-...    (or deepseek/groq/openai/anthropic presets)
+```
+
+The model must support tool/function calling (Qwen3 chat templates and modern
+GLM models do).
+
+### 3. Run
+
+```bash
+uv run python -m standalone.cli -c mydata -p kobold
+# or, without .env, fully explicit:
+uv run python -m standalone.cli -c mydata \
+  -p http://127.0.0.1:5001/v1 -m my-model
+uv run python -m standalone.cli --list      # saved conversations
+```
+
+Flags: `-c` conversation name (its own memory), `-p` provider preset or URL,
+`-m` model, `-k` API key, `--memory-dir` memory location. Presets: `kobold`,
+`ollama`, `lmstudio`, `vllm`, `openai`, `openrouter`, `deepseek`, `groq`,
+`together`, `mistral-api`, `anthropic`, or any OpenAI-compatible URL.
+
+Then just chat: paste a Google Drive link (or an https URL to a CSV, or a local
+path) and ask questions. Follow-ups remember the file and everything discussed.
+
+### Private Google Drive files (one-time setup)
+
+Public ('anyone with the link') files work out of the box. For private files
+link your own Google account once - Google is accessed directly, with no
+intermediary service:
+
+1. https://console.cloud.google.com - create a project, enable the
+   *Google Drive API*;
+2. *OAuth consent screen*: External + yourself as test user;
+3. *Credentials* - create a *Desktop app* OAuth client, download
+   `credentials.json` into the project folder;
+4. `uv run python -m standalone.oauth_setup` - a browser opens, allow
+   read-only Drive access. `google_token.json` appears and renews itself.
+
+Both files are git-ignored; delete them and the access is gone.
+
+### Memory
+
+Memory is plain local files - independent of any AI provider:
+
+```
+memory/conversations/<name>.jsonl   every conversation turn
+memory/datasets/<name>.parquet      the loaded dataset + narrowed scope
+```
+
+Stop the program any time; next run with the same `-c <name>` resumes the
+discussion and the loaded dataset exactly where you left it.
 
 ## Design
 
