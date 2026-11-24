@@ -302,10 +302,27 @@ class App(Tk):
     def __init__(self) -> None:
         super().__init__()
         self.title("Автономный аналитик данных")
-        self.geometry("760x560")
+        self.geometry("760x600")
+        self.minsize(560, 420)
         self.chat: ChatWindow | None = None
+        self.report_callback_exception = self._report_exception
+        ttk.Label(
+            self,
+            text="Аналитик данных - автономный агент (без облака)",
+            font=("TkDefaultFont", 12, "bold"),
+        ).pack(anchor=W, padx=12, pady=(10, 2))
         self.settings = SettingsFrame(self, self._open_chat)
         self.settings.pack(fill=BOTH, expand=True)
+
+    def _report_exception(self, exc_type, exc_value, exc_traceback) -> None:
+        import traceback
+
+        text = "".join(traceback.format_exception(exc_type, exc_value, exc_traceback))
+        try:
+            (app_dir() / "gui_error.log").write_text(text, encoding="utf-8")
+        except OSError:
+            pass
+        messagebox.showerror("Сбой в программе", text[-1500:])
 
     def _open_chat(self, client, conversation_name: str) -> None:
         from .memory import Conversation
@@ -324,8 +341,23 @@ class App(Tk):
 
 
 def main() -> None:
-    app = App()
-    app.protocol("WM_DELETE_WINDOW", app.destroy)
+    try:
+        app = App()
+    except Exception:
+        import traceback
+
+        text = traceback.format_exc()
+        try:
+            (app_dir() / "gui_error.log").write_text(text, encoding="utf-8")
+        except OSError:
+            pass
+        try:
+            root = Tk()
+            root.withdraw()
+            messagebox.showerror("Сбой при запуске", text[-1500:])
+        except Exception:
+            raise
+        raise
     app.mainloop()
 
 
