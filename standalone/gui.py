@@ -14,6 +14,7 @@ import queue
 import subprocess
 import sys
 import threading
+import tkinter as tk
 from pathlib import Path
 from tkinter import (
     BOTH,
@@ -30,6 +31,111 @@ from tkinter import (
 )
 
 CONFIG_NAME = "gui_config.json"
+
+BG = "#060608"
+PANEL = "#0b0b10"
+FIELD = "#07070b"
+LINE = "#2b2b36"
+FG = "#f2f2f5"
+DIM = "#8a8a97"
+AGENT_TXT = "#d4d4dc"
+FONT_MAIN = ("Consolas", 10)
+FONT_SMALL = ("Consolas", 9)
+FONT_TITLE = ("Consolas", 16, "bold")
+FONT_SUB = ("Consolas", 9)
+FONT_USER = ("Consolas", 10, "bold")
+FONT_AGENT = ("Consolas", 10)
+FONT_ERR = ("Consolas", 10, "bold")
+
+
+def apply_style(root) -> None:
+    """Neon-black corporate theme (Cyberpunk-2077 style, monochrome)."""
+    root.configure(background=BG)
+    style = ttk.Style(root)
+    try:
+        style.theme_use("clam")
+    except Exception:
+        pass
+    style.configure(
+        ".",
+        background=BG,
+        foreground=FG,
+        font=FONT_MAIN,
+        borderwidth=0,
+        focuscolor=FG,
+    )
+    style.configure("TFrame", background=BG)
+    style.configure("TLabel", background=BG, foreground=FG)
+    style.configure("Title.TLabel", background=BG, foreground=FG, font=FONT_TITLE)
+    style.configure("Sub.TLabel", background=BG, foreground=DIM, font=FONT_SUB)
+    style.configure("Dim.TLabel", background=BG, foreground=DIM)
+    style.configure(
+        "TEntry",
+        fieldbackground=FIELD,
+        foreground=FG,
+        insertcolor=FG,
+        bordercolor=LINE,
+        lightcolor=LINE,
+        darkcolor=LINE,
+        selectbackground=FG,
+        selectforeground="#060608",
+        padding=4,
+    )
+    style.map("TEntry", bordercolor=[("focus", FG)])
+    style.configure(
+        "TButton",
+        background=PANEL,
+        foreground=FG,
+        bordercolor=LINE,
+        lightcolor=LINE,
+        darkcolor=LINE,
+        focuscolor=FG,
+        font=FONT_MAIN,
+        padding=(12, 5),
+    )
+    style.map(
+        "TButton",
+        background=[("active", "#16161e"), ("pressed", "#1e1e28")],
+        foreground=[("disabled", "#4a4a54")],
+    )
+    style.configure(
+        "Accent.TButton",
+        background=FG,
+        foreground="#060608",
+        bordercolor=FG,
+        focuscolor="#060608",
+        font=("Consolas", 11, "bold"),
+        padding=(18, 7),
+    )
+    style.map(
+        "Accent.TButton",
+        background=[("active", "#d8d8de"), ("pressed", "#c2c2ca")],
+        foreground=[("disabled", "#3a3a42")],
+    )
+    style.configure(
+        "TCombobox",
+        fieldbackground=FIELD,
+        background=PANEL,
+        foreground=FG,
+        arrowcolor=FG,
+        bordercolor=LINE,
+        lightcolor=LINE,
+        darkcolor=LINE,
+        selectbackground=FIELD,
+        selectforeground=FG,
+        padding=4,
+    )
+    style.map(
+        "TCombobox",
+        bordercolor=[("focus", FG)],
+        fieldbackground=[("readonly", FIELD)],
+        foreground=[("readonly", FG)],
+    )
+    root.option_add("*TCombobox*Listbox.background", PANEL)
+    root.option_add("*TCombobox*Listbox.foreground", FG)
+    root.option_add("*TCombobox*Listbox.selectBackground", FG)
+    root.option_add("*TCombobox*Listbox.selectForeground", "#060608")
+    root.option_add("*TCombobox*Listbox.font", FONT_MAIN)
 GOOGLE_OAUTH_SETUP_STEPS = """Приватные файлы Google Drive (заполнить один раз):
 
 1. https://console.cloud.google.com - создайте проект (бесплатно)
@@ -91,18 +197,12 @@ class SettingsFrame(ttk.Frame):
     PROVIDERS = list(PRESET_HINTS)
 
     def __init__(self, master: Tk, on_start) -> None:
-        super().__init__(master, padding=12)
+        super().__init__(master, padding=(16, 4))
         self.on_start = on_start
         self.vars: dict[str, StringVar] = {}
         stored = load_config()
-        title = ttk.Label(
-            self,
-            text="Аналитик данных - автономный агент",
-            font=("TkDefaultFont", 13, "bold"),
-        )
-        title.grid(row=0, column=0, columnspan=3, sticky=W, pady=(0, 10))
-        for row, (key, label, default) in enumerate(self.FIELDS, start=1):
-            ttk.Label(self, text=label).grid(row=row, column=0, sticky=W, pady=3)
+        for row, (key, label, default) in enumerate(self.FIELDS, start=0):
+            ttk.Label(self, text=label, style="Dim.TLabel").grid(row=row, column=0, sticky=W, pady=4)
             variable = StringVar(value=str(stored.get(key, default)))
             self.vars[key] = variable
             if key == "provider":
@@ -117,24 +217,24 @@ class SettingsFrame(ttk.Frame):
                 show = "•" if key == "api_key" else None
                 widget = ttk.Entry(self, textvariable=variable, width=40, show=show)
             widget.grid(row=row, column=1, sticky=W, pady=3)
-        self.hint = ttk.Label(self, text="", foreground="#555")
-        self.hint.grid(row=len(self.FIELDS) + 1, column=0, columnspan=2, sticky=W, pady=(2, 6))
+        self.hint = ttk.Label(self, text="", style="Dim.TLabel")
+        self.hint.grid(row=len(self.FIELDS), column=0, columnspan=2, sticky=W, pady=(2, 8))
 
-        google_row = len(self.FIELDS) + 2
-        self.google_status = ttk.Label(self, text=self._google_status_text(), foreground="#555")
+        google_row = len(self.FIELDS) + 1
+        self.google_status = ttk.Label(self, text=self._google_status_text(), style="Dim.TLabel")
         self.google_status.grid(row=google_row, column=0, columnspan=2, sticky=W)
-        connect = ttk.Button(self, text="Подключить Google", command=self._connect_google)
-        connect.grid(row=google_row, column=2, sticky=W, pady=3)
-        help_button = ttk.Button(self, text="Как подключить?", command=self._show_google_help)
-        help_button.grid(row=google_row + 1, column=0, sticky=W, pady=3)
+        connect = ttk.Button(self, text="ПОДКЛЮЧИТЬ GOOGLE", command=self._connect_google)
+        connect.grid(row=google_row, column=2, sticky=W, pady=4)
+        help_button = ttk.Button(self, text="КАК ПОДКЛЮЧИТЬ?", command=self._show_google_help)
+        help_button.grid(row=google_row + 1, column=0, sticky=W, pady=4)
 
-        self.skills_status = ttk.Label(self, text=self._skills_status_text(), foreground="#555")
-        self.skills_status.grid(row=google_row + 1, column=1, sticky=W, pady=3)
-        skills_button = ttk.Button(self, text="Папка навыков", command=self._open_skills_folder)
-        skills_button.grid(row=google_row + 1, column=2, sticky=W, pady=3)
+        self.skills_status = ttk.Label(self, text=self._skills_status_text(), style="Dim.TLabel")
+        self.skills_status.grid(row=google_row + 1, column=1, sticky=W, pady=4)
+        skills_button = ttk.Button(self, text="ПАПКА НАВЫКОВ", command=self._open_skills_folder)
+        skills_button.grid(row=google_row + 1, column=2, sticky=W, pady=4)
 
-        start = ttk.Button(self, text="Запустить чат", command=self._start)
-        start.grid(row=google_row + 2, column=0, columnspan=3, pady=(14, 0))
+        start = ttk.Button(self, text=">>  ЗАПУСТИТЬ ЧАТ", style="Accent.TButton", command=self._start)
+        start.grid(row=google_row + 2, column=0, columnspan=3, pady=(18, 8))
         self.columnconfigure(1, weight=1)
         self._update_hint()
 
@@ -229,7 +329,7 @@ def make_client(config: dict):
 
 class ChatWindow(ttk.Frame):
     def __init__(self, master: Tk, client, conversation) -> None:
-        super().__init__(master, padding=8)
+        super().__init__(master, padding=10)
         self.master = master
         self.client = client
         self.conversation = conversation
@@ -237,22 +337,46 @@ class ChatWindow(ttk.Frame):
 
         header = ttk.Label(
             self,
-            text=f"Диалог: {conversation.name}   |   память: {conversation.root}",
-            foreground="#555",
+            text=f">> диалог: {conversation.name}   //   память: {conversation.root}",
+            style="Sub.TLabel",
         )
-        header.pack(anchor=W)
+        header.pack(anchor=W, pady=(0, 4))
 
-        self.log = ttk.Text(self, wrap="word", state=DISABLED, width=72, height=24)
-        self.log.pack(fill=BOTH, expand=True, pady=4)
+        console = ttk.Frame(self)
+        console.pack(fill=BOTH, expand=True, pady=4)
+        self.log = tk.Text(
+            console,
+            wrap="word",
+            state=DISABLED,
+            width=72,
+            height=24,
+            background=FIELD,
+            foreground=AGENT_TXT,
+            insertbackground=FG,
+            font=FONT_AGENT,
+            relief="flat",
+            borderwidth=0,
+            highlightthickness=1,
+            highlightbackground=LINE,
+            highlightcolor=FG,
+            selectbackground=FG,
+            selectforeground="#060608",
+            spacing1=2,
+            spacing3=4,
+        )
+        self.log.pack(side=LEFT, fill=BOTH, expand=True)
+        scroll = ttk.Scrollbar(console, command=self.log.yview)
+        scroll.pack(side=LEFT, fill=Y)
+        self.log.configure(yscrollcommand=scroll.set)
 
         bottom = ttk.Frame(self)
         bottom.pack(fill=X, side=BOTTOM)
-        self.entry = ttk.Entry(bottom, width=80)
-        self.entry.pack(side=LEFT, fill=X, expand=True, padx=(0, 6))
+        self.entry = ttk.Entry(bottom, font=FONT_MAIN)
+        self.entry.pack(side=LEFT, fill=X, expand=True, padx=(0, 6), ipady=2)
         self.entry.bind("<Return>", self._send)
-        self.send = ttk.Button(bottom, text="Отправить", command=self._send)
+        self.send = ttk.Button(bottom, text="ОТПРАВИТЬ", style="Accent.TButton", command=self._send)
         self.send.pack(side=LEFT)
-        ttk.Button(bottom, text="Настройки", command=self._open_settings).pack(side=LEFT, padx=(6, 0))
+        ttk.Button(bottom, text="НАСТРОЙКИ", command=self._open_settings).pack(side=LEFT, padx=(6, 0))
         self.busy = False
         self._welcome()
 
@@ -273,12 +397,16 @@ class ChatWindow(ttk.Frame):
         self.entry.focus_set()
 
     def _append_line(self, who: str, text: str, color: str = "#000") -> None:
-        tag = "grey" if color == "#666" else ("alert" if color == "#a00" else "normal")
+        tag = {"#000": "agent", "#666": "sys", "#a00": "err"}.get(color, "agent")
         self.log["state"] = NORMAL
-        self.log.tag_configure("grey", foreground="#666")
-        self.log.tag_configure("alert", foreground="#aa0000")
-        self.log.tag_configure("normal", foreground="#000000")
-        self.log.insert(END, f"{who}: {text.strip()}\n\n", tag)
+        self.log.tag_configure("user", foreground=FG, font=FONT_USER)
+        self.log.tag_configure("agent", foreground=AGENT_TXT, font=FONT_AGENT)
+        self.log.tag_configure("sys", foreground=DIM, font=FONT_SMALL)
+        self.log.tag_configure("err", foreground=FG, background="#1c1c24", font=FONT_ERR)
+        prefix = f"[{who}] "
+        self.log.insert(END, prefix, ("user" if who == "Вы" else tag),)
+        self.log.insert(END, f"{text.strip()}\n\n", tag)
+        self.log.see(END)
         self.log["state"] = DISABLED
 
     def _set_busy(self, busy: bool) -> None:
@@ -326,16 +454,23 @@ class ChatWindow(ttk.Frame):
 class App(Tk):
     def __init__(self) -> None:
         super().__init__()
-        self.title("Автономный аналитик данных")
-        self.geometry("760x600")
-        self.minsize(560, 420)
+        self.title("АНАЛИТИК ДАННЫХ // автономный агент")
+        self.geometry("780x620")
+        self.minsize(560, 440)
+        self.configure(background=BG)
         self.chat: ChatWindow | None = None
         self.report_callback_exception = self._report_exception
+        apply_style(self)
         ttk.Label(
             self,
-            text="Аналитик данных - автономный агент (без облака)",
-            font=("TkDefaultFont", 12, "bold"),
-        ).pack(anchor=W, padx=12, pady=(10, 2))
+            text="О Б З О Р // АНАЛИТИК ДАННЫХ",
+            style="Title.TLabel",
+        ).pack(anchor=W, padx=16, pady=(12, 1))
+        ttk.Label(
+            self,
+            text=">> автономный агент // локальная память // любые модели",
+            style="Sub.TLabel",
+        ).pack(anchor=W, padx=16, pady=(0, 8))
         self.settings = SettingsFrame(self, self._open_chat)
         self.settings.pack(fill=BOTH, expand=True)
 
