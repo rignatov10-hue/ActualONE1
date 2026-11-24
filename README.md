@@ -17,6 +17,35 @@ Two ways to run it:
   Mistral Cloud (needs the Mistral connector + a paid plan). See
   [Model providers](#model-providers) and [Deploy](#deploy-mistral-managed).
 
+## Быстрый старт по-русски (используем GUI / EXE)
+
+1. **Скачать проект.** На странице репозитория нажмите зелёную кнопку **Code →
+   Download ZIP**, распакуйте архив в любую папку.
+2. **Установить Python** с https://www.python.org/downloads/ (при установке
+   поставьте галочку **Add python.exe to PATH**). Уже установлен — пропустите.
+3. **Собрать EXE.** Дважды щёлкните `make_exe.bat` и подождите несколько минут:
+   он сам поставит зависимости и соберёт `dist\Analyst.exe`. Python после этого
+   больше не нужен — `Analyst.exe` можно скопировать куда угодно.
+4. **Запустить модель.** Откройте KoboldCpp со своей GGUF-моделью (например
+   Qwen3.5-9B), включите OpenAI-compatible API, порт **5001**, и дождитесь
+   загрузки модели.
+5. **Настроить агент.** Откройте `Analyst.exe`:
+   - Провайдер: `kobold`
+   - Модель: любое имя (Кобольт его игнорирует), например `qwen3.5-9b`
+   - API-ключ: оставьте пустым (Кобольт локальный, ключ не нужен)
+   - Адрес (URL): можно не заполнять — подставится сам
+6. Нажмите **«Запустить чат»**, вставьте ссылку на CSV/таблицу из Google Drive:
+   `загрузи https://drive.google.com/... и опиши колонки` — и задавайте вопросы.
+   Публичные файлы Drive ("доступен всем, у кого есть ссылка") работают сразу;
+   приватные — после однократной привязки Google (кнопка «Подключить Google» в
+   настройках, шаги — ниже в разделе про приватные файлы).
+
+Настройки хранятся в `gui_config.json`, память диалогов — в `memory\` рядом с
+exe. Скопируйте их вместе с exe — перенесёте и разговор, и загруженные данные.
+
+Вместо EXE можно запускать без сборки: `python gui_entry.py` из папки проекта
+(нужен `pip install pandas pyarrow openpyxl`).
+
 ## Standalone (no Mistral required)
 
 Everything lives in the project folder, so the whole directory is portable:
