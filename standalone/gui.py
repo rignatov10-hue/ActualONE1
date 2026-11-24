@@ -18,6 +18,7 @@ import tkinter as tk
 from pathlib import Path
 from tkinter import (
     BOTH,
+    BOTTOM,
     DISABLED,
     END,
     LEFT,
@@ -26,6 +27,7 @@ from tkinter import (
     Tk,
     W,
     X,
+    Y,
     messagebox,
     ttk,
 )
