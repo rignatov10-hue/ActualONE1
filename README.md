@@ -96,6 +96,36 @@ memory/datasets/<name>.parquet      the loaded dataset + narrowed scope
 Stop the program any time; next run with the same `-c <name>` resumes the
 discussion and the loaded dataset exactly where you left it.
 
+### Desktop GUI (double-click, and no Python afterwards)
+
+`gui_entry.py` opens a window: enter the provider, model and API key, press
+**Start chat**, and the chat opens - same agent, same tools, same memory
+(`gui_config.json` and `memory\` are created next to the program).
+
+Run it in place:
+
+```bash
+python gui_entry.py
+```
+
+### Build the Windows EXE (once, on a Windows PC)
+
+A Windows EXE can only be built on Windows (PyInstaller does not cross-build).
+One double-click does everything:
+
+1. Install Python from python.org (check **Add python.exe to PATH**).
+2. Double-click `make_exe.bat` and wait; it installs dependencies and builds
+   `dist\Analyst.exe`.
+3. From then on: copy `Analyst.exe` anywhere (another PC too), double-click it,
+   fill the settings once, chat. Python is no longer needed on that machine.
+
+The EXE is a single file; settings live in `gui_config.json` and memory in
+`memory\` next to it - copy these along to move the conversations too.
+
+The model must be reachable from the machine the EXE runs on: a local KoboldCpp
+server on the same PC (`-p kobold` style URL `http://127.0.0.1:5001/v1`) or any
+cloud provider by URL and key.
+
 ## Design
 
 - **Google Drive via connector**: the agent mounts the `google_drive_mcp`

@@ -347,3 +347,17 @@ def test_build_client_presets(monkeypatch: pytest.MonkeyPatch):
     assert isinstance(client, llm.AnthropicClient)
     with pytest.raises(llm.LLMError, match="Unknown provider"):
         llm.build_client("nope", None, None, None)
+
+
+def test_gui_config_roundtrip(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    try:
+        import tkinter
+    except ImportError:
+        pytest.skip("tkinter is not available in this environment")
+    import standalone.gui as gui
+    monkeypatch.setattr(gui, "app_dir", lambda: tmp_path)
+    gui.save_config({"provider": "kobold", "model": "qwen-local"})
+    stored = gui.load_config()
+    assert stored["provider"] == "kobold"
+    assert stored["model"] == "qwen-local"
+    assert (tmp_path / "gui_config.json").exists()
