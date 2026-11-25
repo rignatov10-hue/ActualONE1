@@ -47,9 +47,13 @@ exe. Скопируйте их вместе с exe — перенесёте и �
 (нужен `pip install pandas pyarrow openpyxl`).
 
 **Навыки.** Справа от кнопки Google есть кнопка **«Папка навыков»**: она
-открывает папку `skills` и при первом запуске создаёт в ней пример. Каждый
-навык — текстовый файл (подробности ниже в разделе [Навыки](#skills-user-loadable-instructions)).
-Агент подхватывает навыки автоматически, менять код не нужно.
+открывает папку `skills` (при первом запуске в ней создаётся пример). Каждый
+навык — текстовый файл, агент подхватывает его автоматически. В проект уже
+входят 5 готовых навыков: `data-quality` (проверка качества данных перед
+ответом), `business-report` (оформление деловым отчётом), `brief-mode`
+(максимально короткие ответы), `sales-analysis` (правила анализа продаж) и
+`report-format` (пример-шаблон). Чтобы включить навык в диалоге, скажите:
+«используй навык sales-analysis». Не нужен — просто удалите его файл.
 
 ## Skills (user-loadable instructions)
 
@@ -64,8 +68,11 @@ terminology, report templates and checklists - nothing is ever executed.
 
 ```
 skills/
-  report-format/      example shipped with the project
-    SKILL.md          front matter (name, description) + instructions
+  data-quality/       готовый: проверка качества данных перед ответом
+  business-report/    готовый: ответы как деловой отчёт
+  brief-mode/         готовый: максимально короткие ответы
+  sales-analysis/     готовый: анализ продаж (выручка, средний чек, топы)
+  report-format/      пример-шаблон для своих навыков
   my-glossary.md      a one-file skill is fine too
 ```
 
