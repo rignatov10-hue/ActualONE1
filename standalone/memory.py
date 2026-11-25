@@ -42,6 +42,8 @@ class Conversation:
         self.full: pd.DataFrame | None = None
         self.active: pd.DataFrame | None = None
         self.active_description = "all rows of the loaded file"
+        self.approval_hook = None
+        self.activity_hook = None
 
     # ---- paths -------------------------------------------------------------
     @property
@@ -62,6 +64,8 @@ class Conversation:
 
     # ---- load / save -------------------------------------------------------
     def load(self) -> "Conversation":
+        self.approval_hook = None
+        self.activity_hook = None
         if self.history_path.exists():
             events: list[dict[str, Any]] = []
             for line in self.history_path.read_text(encoding="utf-8").splitlines():
@@ -106,6 +110,28 @@ class Conversation:
         with self.history_path.open("w", encoding="utf-8") as handle:
             for event in self.messages:
                 handle.write(json.dumps(event, ensure_ascii=False, default=str) + "\n")
+
+    # ---- context management -------------------------------------------------
+    def model_messages(self) -> list[dict[str, Any]]:
+        """History for the model: everything except summary events."""
+        return [event for event in self.messages if event.get("role") != "summary"]
+
+    def latest_summary(self) -> str:
+        for event in reversed(self.messages):
+            if event.get("role") == "summary":
+                return str(event.get("content") or "")
+        return ""
+
+    def condense(self, summary_text: str, keep: int) -> None:
+        """Compress the history: one summary event plus the last `keep` events."""
+        summary_event = {"role": "summary", "content": summary_text, "time": utc_now()}
+        self.messages = [summary_event] + self.model_messages()[-keep:]
+        self.save()
+
+    def forget(self) -> None:
+        """Drop the whole history (dataset keeps its files)."""
+        self.messages = []
+        self.save()
 
     # ---- dataset state -----------------------------------------------------
     def set_dataset(self, dataset: Dataset, frame: pd.DataFrame) -> None:
@@ -159,3 +185,42 @@ def list_conversations(root: Path | str | None = None) -> list[str]:
     if not directory.exists():
         return []
     return sorted(path.stem for path in directory.glob("*.jsonl"))
+
+# ---- long-term facts (cross-conversation) ------------------------------------
+
+FACTS_NAME = "facts.json"
+
+
+def facts_path(root: Path | str) -> Path:
+    return Path(root).resolve() / FACTS_NAME
+
+
+def load_facts(root: Path | str) -> dict[str, str]:
+    try:
+        data = json.loads(facts_path(root).read_text(encoding="utf-8"))
+        return {str(key): str(value) for key, value in data.items() if str(value).strip()}
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def save_fact(root: Path | str, key: str, value: str) -> dict[str, str]:
+    path = facts_path(root)
+    current = load_facts(root)
+    if value:
+        current[key] = value
+    else:
+        current.pop(key, None)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(current, ensure_ascii=False, indent=2), encoding="utf-8")
+    return current
+
+
+def facts_section(facts: dict[str, str]) -> str:
+    if not facts:
+        return ""
+    listing = "\n".join(f"- {key}: {content}" for key, content in sorted(facts.items()))
+    return (
+        "\n\nLong-term facts about the user (kept in memory/facts.json across conversations):\n"
+        + listing
+        + "\nUse them quietly; update or extend them with save_fact when the user shares something durable."
+    )

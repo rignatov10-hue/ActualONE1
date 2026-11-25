@@ -389,6 +389,8 @@ class ChatWindow(ttk.Frame):
         self.send.pack(side=LEFT)
         ttk.Button(bottom, text="НАСТРОЙКИ", command=self._open_settings).pack(side=LEFT, padx=(6, 0))
         self.busy = False
+        conversation.approval_hook = self._ask_approval
+        conversation.activity_hook = self._report_activity
         self._welcome()
 
     def _open_settings(self) -> None:
@@ -426,6 +428,23 @@ class ChatWindow(ttk.Frame):
         self.send["state"] = state
         self.entry["state"] = state
 
+    def _ask_approval(self, question: str) -> bool:
+        result = {"value": False}
+        done = threading.Event()
+
+        def ask() -> None:
+            try:
+                result["value"] = messagebox.askyesno("ПОДТВЕРЖДЕНИЕ ДЕЙСТВИЯ", question)
+            finally:
+                done.set()
+
+        self.master.after(0, ask)
+        done.wait(timeout=600)
+        return result["value"]
+
+    def _report_activity(self, text: str) -> None:
+        self.queue.put(("activity", text))
+
     # ---- turn flow ---------------------------------------------------------
     def _send(self, event=None) -> None:
         if self.busy:
@@ -457,6 +476,10 @@ class ChatWindow(ttk.Frame):
             return
         if status == "ok":
             self._append_line("Агент", message)
+        elif status == "activity":
+            self._append_line("Система", message, color="#666")
+            self.after(100, self._poll)
+            return
         else:
             self._append_line("Ошибка", message, color="#a00")
         self._set_busy(False)

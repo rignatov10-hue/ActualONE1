@@ -107,6 +107,21 @@ def _file_tools_schema() -> list[dict[str, Any]]:
             },
         },
         {
+            "name": "web_read",
+            "description": (
+                "Fetch a public web page and return its readable text (tags and scripts"
+                " stripped). Use for documentation, search results pages and articles."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string", "description": "http(s) URL to read."},
+                    "max_chars": {"type": "integer", "description": f"Characters to return (default {DEFAULT_MAX_CHARS})."},
+                },
+                "required": ["url"],
+            },
+        },
+        {
             "name": "open_url",
             "description": "Open an http(s) URL in the user's default browser.",
             "parameters": {
@@ -214,6 +229,36 @@ def write_file(conv: Any, path: str, content: str) -> dict[str, Any]:
     return result
 
 
+def web_read(conv: Any, url: str, max_chars: int = DEFAULT_MAX_CHARS) -> dict[str, Any]:
+    import re as _re
+    from urllib.request import Request as _Request, urlopen as _urlopen
+
+    clean = (url or "").strip()
+    if not clean.lower().startswith(("http://", "https://")):
+        raise PCError("Only http(s) URLs can be read.")
+    try:
+        limit = max(200, min(int(max_chars), MAX_MAX_CHARS))
+    except (TypeError, ValueError):
+        limit = DEFAULT_MAX_CHARS
+    req = _Request(clean, headers={"User-Agent": "Mozilla/5.0 (standalone analyst agent)"})
+    try:
+        with _urlopen(req, timeout=20) as response:
+            raw = response.read(2_000_000)
+    except Exception as exc:
+        raise PCError(f"Could not fetch URL: {exc}") from None
+    try:
+        text = raw.decode("utf-8", errors="replace")
+    except Exception as exc:
+        raise PCError(f"Could not decode page: {exc}") from None
+    text = _re.sub(r"<script\b.*?</script>", " ", text, flags=_re.I | _re.S)
+    text = _re.sub(r"<style\b.*?</style>", " ", text, flags=_re.I | _re.S)
+    text = _re.sub(r"<[^>]+>", " ", text)
+    text = _re.sub(r"\s+", " ", text).strip()
+    result = {"url": clean, "length": len(text), "content": _trim(text, limit)}
+    _audit(conv, {"time": time.strftime("%Y-%m-%dT%H:%M:%S"), "tool": "web_read", "url": clean})
+    return result
+
+
 def _launch(target: str) -> None:
     if hasattr(os, "startfile"):
         os.startfile(target)  # type: ignore[attr-defined]
@@ -249,6 +294,7 @@ PC_IMPLS: dict[str, Callable[..., dict[str, Any]]] = {
     "write_file": write_file,
     "open_path": open_path,
     "open_url": open_url,
+    "web_read": web_read,
 }
 
 PC_SECTION = """

@@ -101,7 +101,8 @@ def test_with_skills_instructions_and_tool_extend(tmp_path: Path, isolated_skill
     assert "format" in instructions
     names = [schema["name"] for schema in schemas]
     assert names[:5] == [schema["name"] for schema in tools.TOOL_SCHEMAS]
-    assert names[-1] == skills.TOOL_NAME
+    assert skills.TOOL_NAME in names
+    assert "save_fact" in names and "request_approval" in names
 
 
 def test_end_to_end_skill_roundtrip(tmp_path: Path, isolated_skills: Path):

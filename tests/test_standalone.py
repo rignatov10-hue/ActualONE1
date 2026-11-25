@@ -227,7 +227,7 @@ def test_skills_end_to_end_with_loop(mock_server: str, tmp_path: Path, monkeypat
     assert answer == "VERIFIED"
     completions = [request for request in MockHandler.requests if request["path"].endswith("/chat/completions")]
     tool_names = [tool["function"]["name"] for tool in completions[0]["body"]["tools"]]
-    assert tool_names[-1] == "load_skill"
+    assert "load_skill" in tool_names
     assert "check: test skill" in completions[0]["body"]["messages"][0]["content"]
     tool_messages = [message for request in completions for message in request["body"]["messages"] if message.get("role") == "tool"]
     assert "VERIFIED" in tool_messages[0]["content"]
