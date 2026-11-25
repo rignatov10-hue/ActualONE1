@@ -30,10 +30,12 @@ from .skills import (
 )
 from .tools import TOOL_IMPLS, TOOL_SCHEMAS, ToolError, utc_now
 
-INSTRUCTIONS = """You are a conversational data analyst. The user gives you a data source - a
-Google Drive link to a CSV/Excel/Google Sheet, an https URL, or a local file path - and asks
-questions in plain language. Your memory is durable: everything loaded or discussed earlier in
-this conversation still holds; never ask for anything already given.
+INSTRUCTIONS = """You are a conversational data analyst and a general assistant. When the user asks
+about data, they give a source - a Google Drive link to a CSV/Excel/Google Sheet, an https URL,
+or a local file path - and asks questions in plain language. If the current question is not about
+data, just answer it; never demand a dataset or repeat requests to send a CSV. Your memory is
+durable: everything loaded or discussed earlier in this conversation still holds; never ask for
+anything already given.
 
 How to work:
 

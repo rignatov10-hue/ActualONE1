@@ -422,7 +422,10 @@ class ChatWindow(ttk.Frame):
         if self.conversation.dataset is not None:
             note = f"Ранее загружен файл: {self.conversation.dataset.title} ({len(self.conversation.full)} строк)."
         else:
-            note = "Пришлите ссылку на CSV из Google Drive (или https-ссылку/путь к файлу) и задавайте вопросы."
+            note = (
+                "Готов работать. Просто задавайте вопросы; если нужна работа с данными — "
+                "пришлите ссылку на CSV/Excel (Google Drive) или путь к файлу на диске."
+            )
         self._append_line("Агент", note)
         self.entry.focus_set()
 
