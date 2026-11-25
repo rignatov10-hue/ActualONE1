@@ -83,7 +83,7 @@ def _draw_px(value: Any, size: int) -> float:
     except (TypeError, ValueError):
         raise PCError(f"Invalid coordinate value: {value!r}") from None
     if coord > 1000:
-        return max(0.0, min(coord, float(size)))
+        return max(0.0, coord)
     return max(0.0, min(coord, 1000.0)) * size / 1000.0
 
 
@@ -222,17 +222,21 @@ def _file_tools_schema() -> list[dict[str, Any]]:
             "name": "draw_image",
             "description": (
                 "Draw a PNG picture on the user's PC from primitive commands (rect,"
-                " ellipse, line, polygon, text) on a 0-1000 coordinate grid. Good for"
-                " logos, schemas, charts-as-pictures and simple art; open the result"
-                " with open_path."
+                " ellipse, line, polygon, text) on a 0-1000 coordinate grid where (0,0)"
+                " is the top-left corner and (1000,1000) is the bottom-right; the"
+                " canvas is width x height pixels (default 1024, max 4096: for 4K art"
+                " pass width=4096 and height=4096 and keep using the same 0-1000"
+                " grid). Do not use coordinates above 1000 and do not stack identical"
+                " shapes. Good for logos, schemas, charts-as-pictures and simple art;"
+                " open the result with open_path."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "path": {"type": "string", "description": "Output PNG path: absolute, '~/...', 'Desktop/<name>' (the real Desktop), or relative to the user profile. '.png' is appended automatically."},
                     "commands": {"type": "string", "description": "JSON array of primitives: {\"shape\":\"rect\"|\"ellipse\"|\"line\",\"xy\":[x1,y1,x2,y2]}, {\"shape\":\"polygon\",\"points\":[x1,y1,x2,y2,x3,y3,...]}, {\"shape\":\"text\",\"xy\":[x,y],\"text\":\"...\",\"size\":24}. Every object supports \"fill\" (CSS color like '#2233ff'), rect/ellipse/line also \"outline\" and \"width\"."},
-                    "width": {"type": "integer", "description": "Image width in pixels (default 1024, max 4096)."},
-                    "height": {"type": "integer", "description": "Image height in pixels (default 1024, max 4096)."},
+                    "width": {"type": "integer", "description": "Image width in pixels (default 1024, max 4096). Coordinates stay on the 0-1000 grid regardless."},
+                    "height": {"type": "integer", "description": "Image height in pixels (default 1024, max 4096). Coordinates stay on the 0-1000 grid regardless."},
                     "background": {"type": "string", "description": "Background CSS color (default '#ffffff')."},
                 },
                 "required": ["path", "commands"],
@@ -501,51 +505,102 @@ def _draw_font(size: int) -> Any:
         return ImageFont.load_default()
 
 
-def _apply_draw_command(draw: Any, cmd: Any, index: int, width: int, height: int) -> None:
+def _flatten_draw_points(shape: str, cmd: dict[str, Any]) -> list[Any]:
+    xy = cmd.get("xy") or cmd.get("coords") or cmd.get("box")
+    source = (cmd.get("points") or xy) if shape == "polygon" else xy
+    if not isinstance(source, (list, tuple)):
+        return []
+    flat: list[Any] = []
+    for value in source:
+        if isinstance(value, (list, tuple)) and len(value) == 2:
+            flat.extend(value)
+        else:
+            flat.append(value)
+    return flat
+
+
+def _command_extent(commands: Any) -> tuple[float, float]:
+    """Worst-case pixel extent of coordinates given on the 0-1000 grid."""
+    ext_x = ext_y = 0.0
+    for cmd in commands:
+        if not isinstance(cmd, dict):
+            continue
+        shape = str(cmd.get("shape") or cmd.get("type") or "").strip().lower()
+        if shape == "polygon":
+            flat = list(cmd.get("points") or cmd.get("xy") or [])
+        else:
+            xy = cmd.get("xy") or cmd.get("coords") or cmd.get("box")
+            flat = list(xy) if isinstance(xy, (list, tuple)) else []
+        for pos, value in enumerate(flat):
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                continue
+            coord = float(value)
+            if coord > 1000.0:
+                if pos % 2 == 0:
+                    ext_x = max(ext_x, coord)
+                else:
+                    ext_y = max(ext_y, coord)
+    return ext_x, ext_y
+
+
+def _apply_draw_command(
+    draw: Any, cmd: Any, index: int, width: int, height: int, scale: float = 1.0
+) -> None:
     if not isinstance(cmd, dict):
         raise PCError(f"Command #{index} is not an object.")
     shape = str(cmd.get("shape") or cmd.get("type") or "").strip().lower()
     fill = cmd.get("fill") or cmd.get("color") or "#000000"
     xy = cmd.get("xy") or cmd.get("coords") or cmd.get("box")
+
+    def px(value: Any, size: int) -> float:
+        return max(0.0, min(_draw_px(value, size) * scale if scale < 1.0 else _draw_px(value, size), float(size)))
+
+    def thickness(value: Any, default: int) -> int:
+        try:
+            raw = int(value or default)
+        except (TypeError, ValueError):
+            raw = default
+        return max(1, round(raw * scale))
+
     try:
         if shape == "rect" or shape == "rectangle":
             if not isinstance(xy, (list, tuple)) or len(xy) != 4:
                 raise PCError(f"Command #{index} ('rect') needs xy = [x1, y1, x2, y2].")
             box = [
-                _draw_px(xy[0], width),
-                _draw_px(xy[1], height),
-                _draw_px(xy[2], width),
-                _draw_px(xy[3], height),
+                px(xy[0], width),
+                px(xy[1], height),
+                px(xy[2], width),
+                px(xy[3], height),
             ]
-            draw.rectangle(box, fill=fill, outline=cmd.get("outline") or fill, width=int(cmd.get("width", 1) or 1))
+            draw.rectangle(box, fill=fill, outline=cmd.get("outline") or fill, width=thickness(cmd.get("width"), 1))
         elif shape == "ellipse" or shape == "circle":
             if not isinstance(xy, (list, tuple)) or len(xy) != 4:
                 raise PCError(f"Command #{index} ('ellipse') needs xy = [x1, y1, x2, y2].")
             box = [
-                _draw_px(xy[0], width),
-                _draw_px(xy[1], height),
-                _draw_px(xy[2], width),
-                _draw_px(xy[3], height),
+                px(xy[0], width),
+                px(xy[1], height),
+                px(xy[2], width),
+                px(xy[3], height),
             ]
-            draw.ellipse(box, fill=fill, outline=cmd.get("outline") or fill, width=int(cmd.get("width", 1) or 1))
+            draw.ellipse(box, fill=fill, outline=cmd.get("outline") or fill, width=thickness(cmd.get("width"), 1))
         elif shape == "line":
             if not isinstance(xy, (list, tuple)) or len(xy) != 4:
                 raise PCError(f"Command #{index} ('line') needs xy = [x1, y1, x2, y2].")
             draw.line(
-                [_draw_px(xy[0], width), _draw_px(xy[1], height), _draw_px(xy[2], width), _draw_px(xy[3], height)],
+                [px(xy[0], width), px(xy[1], height), px(xy[2], width), px(xy[3], height)],
                 fill=fill,
-                width=max(1, int(cmd.get("width", 2) or 2)),
+                width=thickness(cmd.get("width"), 2),
             )
         elif shape == "polygon":
             points = cmd.get("points") or xy
-            if not isinstance(points, (list, tuple)) or len(points) < 6:
+            if not isinstance(points, (list, tuple)) or len(_flatten_draw_points("polygon", {"points": points})) < 6:
                 raise PCError(f"Command #{index} ('polygon') needs points = [x1, y1, x2, y2, x3, y3, ...].")
             flat: list[float] = []
             for value in points:
                 if isinstance(value, (list, tuple)) and len(value) == 2:
-                    flat.extend([_draw_px(value[0], width), _draw_px(value[1], height)])
+                    flat.extend([px(value[0], width), px(value[1], height)])
                 else:
-                    flat.append(_draw_px(value, width))
+                    flat.append(px(value, width))
             if len(flat) % 2 or len(flat) < 6:
                 raise PCError(f"Command #{index} ('polygon') has unpaired coordinates.")
             draw.polygon(list(zip(flat[0::2], flat[1::2])), fill=fill, outline=cmd.get("outline") or fill)
@@ -555,9 +610,15 @@ def _apply_draw_command(draw: Any, cmd: Any, index: int, width: int, height: int
                 raise PCError(f"Command #{index} ('text') has empty text.")
             if not isinstance(xy, (list, tuple)) or len(xy) != 2:
                 raise PCError(f"Command #{index} ('text') needs xy = [x, y].")
-            size = max(6, min(int(cmd.get("size", 24) or 24), 400))
+            try:
+                raw_size = int(cmd.get("size", 24) or 24)
+            except (TypeError, ValueError):
+                raw_size = 24
+            size = max(6, min(raw_size, 400))
+            if scale < 1.0:
+                size = max(6, round(size * scale))
             draw.text(
-                (_draw_px(xy[0], width), _draw_px(xy[1], height)),
+                (px(xy[0], width), px(xy[1], height)),
                 message,
                 fill=fill,
                 font=_draw_font(size),
@@ -599,6 +660,10 @@ def draw_image(
         h = max(16, min(int(height), MAX_DRAW_SIZE))
     except (TypeError, ValueError):
         w = h = 1024
+    ext_x, ext_y = _command_extent(commands)
+    scale = 1.0
+    if ext_x > w or ext_y > h:
+        scale = min(w / ext_x if ext_x else 1.0, h / ext_y if ext_y else 1.0)
     target = smart_path(path)
     if target.suffix.lower() != ".png":
         target = target.with_suffix(".png")
@@ -612,12 +677,17 @@ def draw_image(
         raise PCError(f"Could not create folder: {exc}") from None
     draw = ImageDraw.Draw(image)
     for index, cmd in enumerate(commands):
-        _apply_draw_command(draw, cmd, index, w, h)
+        _apply_draw_command(draw, cmd, index, w, h, scale)
     try:
         image.save(target, "PNG")
     except (OSError, ValueError) as exc:
         raise PCError(f"Could not save image: {exc}") from None
-    result = {"path": str(target.resolve()), "size": [w, h], "shapes": len(commands)}
+    result = {
+        "path": str(target.resolve()),
+        "size": [w, h],
+        "shapes": len(commands),
+        "scaled": round(scale, 4),
+    }
     _audit(
         conv,
         {"time": time.strftime("%Y-%m-%dT%H:%M:%S"), "tool": "draw_image", "path": str(target), "shapes": len(commands)},
@@ -676,8 +746,11 @@ Work like an autonomous coding agent: locate (search_files, list_dir) -> read
 or fully rewritten files) -> run/verify (run_shell) -> report the result. Never
 end with 'do it yourself' instructions when a tool can do it.
 draw_image renders a PNG picture from primitive commands (rect/ellipse/line/
-polygon/text, coordinates on a 0-1000 grid) - draw logos, schemas and simple
-art to 'Desktop/<name>' and open the file with open_path so the user sees it.
+polygon/text, coordinates always on a 0-1000 grid where (0,0) is top-left;
+canvas size = width x height, default 1024, for 4K pass width=4096&height=4096
+and keep using the 0-1000 grid; never stack identical shapes) - draw logos,
+schemas and simple art to 'Desktop/<name>' and open the file with open_path so
+the user sees it.
 A local safety filter hard-blocks destructive system commands (format, shutdown,
 disk writes, deletes of system folders) regardless of approvals.
 Rules: run only what the task needs; prefer read-only commands; announce in the

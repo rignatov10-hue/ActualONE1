@@ -142,3 +142,34 @@ def test_draw_image_desktop_path(conv: memory.Conversation, desktop: Path):
     )
     assert desktop in Path(result["path"]).parents
     assert Path(result["path"]).is_file()
+
+
+def test_draw_image_scales_overflowing_pixel_coords(conv: memory.Conversation, tmp_path: Path):
+    from PIL import Image
+
+    commands = [
+        {"shape": "rect", "xy": [0, 0, 4096, 4096], "fill": "#0a0a12"},
+        {"shape": "text", "xy": [200, 3200], "text": "ActualONE", "size": 480, "fill": "#ffffff"},
+    ]
+    result = pc.draw_image(conv, str(tmp_path / "scaled.png"), commands)
+    assert result["size"] == [1024, 1024]
+    assert result["scaled"] == pytest.approx(1024 / 4096, abs=1e-3)
+    with Image.open(tmp_path / "scaled.png") as image:
+        assert image.size == (1024, 1024)
+        assert image.getpixel((500, 500)) == (10, 10, 18)
+
+
+def test_draw_image_4k_canvas_keeps_scale_one(conv: memory.Conversation, tmp_path: Path):
+    from PIL import Image
+
+    commands = [
+        {"shape": "rect", "xy": [0, 0, 1000, 1000], "fill": "#0a0a12"},
+        {"shape": "rect", "xy": [400, 400, 600, 600], "fill": "#ff004c"},
+    ]
+    result = pc.draw_image(conv, str(tmp_path / "four-k.png"), commands, width=4096, height=4096)
+    assert result["size"] == [4096, 4096]
+    assert result["scaled"] == 1.0
+    with Image.open(tmp_path / "four-k.png") as image:
+        assert image.size == (4096, 4096)
+        assert image.getpixel((100, 100)) == (10, 10, 18)
+        assert image.getpixel((2048, 2048)) == (255, 0, 76)
