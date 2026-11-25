@@ -444,9 +444,8 @@ class ChatWindow(ttk.Frame):
 
     def _set_busy(self, busy: bool) -> None:
         self.busy = busy
-        state = DISABLED if busy else NORMAL
-        self.send["state"] = state
-        self.entry["state"] = state
+        self.send["state"] = DISABLED if busy else NORMAL
+        self.send["text"] = "ДУМАЮ…" if busy else "ОТПРАВИТЬ"
 
     def _ask_approval(self, question: str) -> bool:
         result = {"value": False}
