@@ -201,6 +201,19 @@ Flags: `-c` conversation name (its own memory), `-p` provider preset or URL,
 `ollama`, `lmstudio`, `vllm`, `openai`, `openrouter`, `deepseek`, `groq`,
 `together`, `mistral-api`, `anthropic`, or any OpenAI-compatible URL.
 
+Как подключить конкретный сервис в GUI:
+
+- **Claude**: провайдер `anthropic`, модель можно оставить пустой
+  (`claude-sonnet-4-5` подставится), ключ с console.anthropic.com — в поле
+  «API-ключ».
+- **DeepSeek**: провайдер `deepseek`, модель можно оставить пустой
+  (`deepseek-chat` подставится), ключ с platform.deepseek.com — в поле
+  «API-ключ».
+- **OpenAI/OpenRouter/Groq/Together**: провайдер + свой ключ; модель
+  подставится разумная по умолчанию, но лучше указать свою.
+- **Локалка (KoboldCpp)**: провайдер `kobold`, ключ не нужен — только
+  запущенный KoboldCpp на порту 5001.
+
 Then just chat: paste a Google Drive link (or an https URL to a CSV, or a local
 path) and ask questions. Follow-ups remember the file and everything discussed.
 

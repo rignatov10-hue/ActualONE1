@@ -397,7 +397,15 @@ def build_client(provider: str, model: str | None, base_url: str | None, api_key
         key = api_key or os.environ.get(key_env) or ("local" if base_url.startswith("http://127") or base_url.startswith("http://localhost") else "")
         if not key:
             raise LLMError(f"Set {key_env} (or pass --api-key) for provider '{provider}'.")
-        models = {"kobold": "local-model"}
+        models = {
+            "kobold": "local-model",
+            "deepseek": "deepseek-chat",
+            "openai": "gpt-4o-mini",
+            "openrouter": "openai/gpt-4o-mini",
+            "groq": "llama-3.3-70b-versatile",
+            "mistral-api": "mistral-large-latest",
+            "together": "meta-llama/Llama-3.3-70B-Instruct-Turbo",
+        }
         return OpenAICompatClient(model or models.get(provider, provider), base_url, key)
     if provider == "custom":
         return OpenAICompatClient(

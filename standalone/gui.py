@@ -231,7 +231,7 @@ class SettingsFrame(ttk.Frame):
         "groq": "api.groq.com/openai/v1 + ключ",
         "together": "api.together.xyz/v1 + ключ",
         "mistral-api": "api.mistral.ai/v1 + ключ mstrl_...",
-        "anthropic": "claude + ключ x-api (ANTHROPIC_API_KEY)",
+        "anthropic": "Claude: ключ с console.anthropic.com вставь в поле «API-ключ» (модель можно не менять)",
     }
     PROVIDERS = list(PRESET_HINTS)
 
