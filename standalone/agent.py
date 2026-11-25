@@ -14,10 +14,12 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 import time
 from typing import Any, Callable
 
 from . import browser as browser_mod
+from . import knowledge as knowledge_mod
 from . import pc as pc_mod
 from . import vm as vm_mod
 from .llm import AnthropicClient, OpenAICompatClient
@@ -133,6 +135,25 @@ SUMMARY_KEEP = 12
 DEFAULT_MAX_STEPS = max(1, int(os.environ.get("ANALYST_MAX_STEPS", "32")))
 
 
+class TurnCancelled(Exception):
+    """The user pressed STOP during the turn."""
+
+
+CANCEL_NOTE = "⏹ Остановлено пользователем. Память сохранена — напишите, как продолжить."
+
+
+_cancel_event = threading.Event()
+
+
+def request_cancel() -> None:
+    """Ask the running turn to stop at the next token or step boundary."""
+    _cancel_event.set()
+
+
+def _cancelled() -> bool:
+    return _cancel_event.is_set()
+
+
 def _trace(conv: Conversation, event: dict[str, Any]) -> None:
     try:
         directory = conv.root / "traces"
@@ -191,6 +212,13 @@ def _execute_impl(conv: Conversation, call: dict[str, Any]) -> str:
         try:
             return json.dumps(run_load_skill(arguments.get("name", "")), ensure_ascii=False, default=str)
         except SkillError as exc:
+            return json.dumps({"error": str(exc)}, ensure_ascii=False)
+        except TypeError as exc:
+            return json.dumps({"error": f"Bad arguments for '{name}': {exc}."}, ensure_ascii=False)
+    if name == "search_knowledge":
+        try:
+            return json.dumps(knowledge_mod.search_knowledge(conv, **arguments), ensure_ascii=False, default=str)
+        except PCError as exc:
             return json.dumps({"error": str(exc)}, ensure_ascii=False)
         except TypeError as exc:
             return json.dumps({"error": f"Bad arguments for '{name}': {exc}."}, ensure_ascii=False)
@@ -347,11 +375,20 @@ def _maybe_summarize(conv: Conversation, client: Any) -> None:
     _trace(conv, {"event": "summarize", "compressed": len(tail)})
 
 
-def run_turn(conv: Conversation, client: Any, user_text: str, max_steps: int | None = None) -> str:
+def run_turn(
+    conv: Conversation,
+    client: Any,
+    user_text: str,
+    max_steps: int | None = None,
+    on_delta: Callable[[str], None] | None = None,
+) -> str:
     """One user turn: run the tool loop until the model produces a final answer."""
     steps = DEFAULT_MAX_STEPS if max_steps is None else max(1, int(max_steps))
+    _cancel_event.clear()
     conv.append({"role": "user", "content": user_text, "time": utc_now()})
     instructions, schemas = _system_state()
+    schemas.append(knowledge_mod.KNOWLEDGE_TOOL_SCHEMA)
+    instructions += knowledge_mod.KNOWLEDGE_SECTION
     _maybe_summarize(conv, client)
     summary = conv.latest_summary()
     if summary:
@@ -360,34 +397,47 @@ def run_turn(conv: Conversation, client: Any, user_text: str, max_steps: int | N
     if facts:
         instructions += facts_section(facts)
     messages = conv.model_messages()
-    for step in range(1, steps + 1):
-        response = client.complete(instructions, messages, schemas)
-        assistant: dict[str, Any] = {"role": "assistant", "content": response.get("content")}
-        if response.get("tool_calls"):
-            assistant["tool_calls"] = response["tool_calls"]
-        conv.append(assistant)
-        messages.append(assistant)
-        if not response.get("tool_calls"):
-            return response.get("content") or ""
-        for call in response["tool_calls"]:
-            content = _execute(conv, call, step)
-            tool_event = {
-                "role": "tool",
-                "tool_call_id": call.get("id") or call.get("name", "tool"),
-                "name": call.get("name", "tool"),
-                "content": content,
-            }
-            conv.append(tool_event)
-            messages.append(tool_event)
-    fallback = {
-        "role": "assistant",
-        "content": (
-            "Остановился до завершения задачи: исчерпан лимит шагов на один запрос."
-            " Напишите «продолжай» - продолжу с того же места."
-        ),
-    }
-    conv.append(fallback)
-    return fallback["content"]
+
+    def _delta(text: str) -> None:
+        if _cancel_event.is_set():
+            raise TurnCancelled()
+        if on_delta:
+            on_delta(text)
+
+    try:
+        for step in range(1, steps + 1):
+            response = client.complete(instructions, messages, schemas, _delta if on_delta else None)
+            assistant: dict[str, Any] = {"role": "assistant", "content": response.get("content")}
+            if response.get("tool_calls"):
+                assistant["tool_calls"] = response["tool_calls"]
+            conv.append(assistant)
+            messages.append(assistant)
+            if not response.get("tool_calls"):
+                return response.get("content") or ""
+            for call in response["tool_calls"]:
+                if _cancel_event.is_set():
+                    raise TurnCancelled()
+                content = _execute(conv, call, step)
+                tool_event = {
+                    "role": "tool",
+                    "tool_call_id": call.get("id") or call.get("name", "tool"),
+                    "name": call.get("name", "tool"),
+                    "content": content,
+                }
+                conv.append(tool_event)
+                messages.append(tool_event)
+        fallback = {
+            "role": "assistant",
+            "content": (
+                "Остановился до завершения задачи: исчерпан лимит шагов на один запрос."
+                " Напишите «продолжай» - продолжу с того же места."
+            ),
+        }
+        conv.append(fallback)
+        return fallback["content"]
+    except TurnCancelled:
+        conv.append({"role": "assistant", "content": CANCEL_NOTE})
+        return CANCEL_NOTE
 
 
 def chat(conv: Conversation, client: Any) -> None:

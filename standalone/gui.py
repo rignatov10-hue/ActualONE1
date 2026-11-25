@@ -436,6 +436,8 @@ class ChatWindow(ttk.Frame):
         self.send.pack(side=LEFT)
         ttk.Button(bottom, text="НАСТРОЙКИ", command=self._open_settings).pack(side=LEFT, padx=(6, 0))
         self.busy = False
+        self._stream_buf = ""
+        self._stream_open = False
         conversation.approval_hook = self._ask_approval
         conversation.activity_hook = self._report_activity
         self._welcome()
@@ -474,8 +476,9 @@ class ChatWindow(ttk.Frame):
 
     def _set_busy(self, busy: bool) -> None:
         self.busy = busy
-        self.send["state"] = DISABLED if busy else NORMAL
-        self.send["text"] = "ДУМАЮ…" if busy else "ОТПРАВИТЬ"
+        self.send["state"] = NORMAL
+        self.send["text"] = "СТОП" if busy else "ОТПРАВИТЬ"
+        self.entry.focus_set()
 
     def _ask_approval(self, question: str) -> bool:
         result = {"value": False}
@@ -497,12 +500,17 @@ class ChatWindow(ttk.Frame):
     # ---- turn flow ---------------------------------------------------------
     def _send(self, event=None) -> None:
         if self.busy:
+            from .agent import request_cancel
+
+            request_cancel()
             return
         text = self.entry.get().strip()
         if not text:
             return
         self.entry.delete(0, END)
         self._append_line("Вы", text)
+        self._stream_buf = ""
+        self._stream_open = False
         self._set_busy(True)
         worker = threading.Thread(target=self._work, args=(text,), daemon=True)
         worker.start()
@@ -511,11 +519,35 @@ class ChatWindow(ttk.Frame):
     def _work(self, text: str) -> None:
         from .agent import run_turn
 
+        def on_delta(delta: str) -> None:
+            self.queue.put(("stream", delta))
+
         try:
-            answer = run_turn(self.conversation, self.client, text)
+            answer = run_turn(self.conversation, self.client, text, on_delta=on_delta)
             self.queue.put(("ok", answer))
         except Exception as exc:
             self.queue.put(("fail", f"{type(exc).__name__}: {exc}"))
+
+    def _stream_write(self, delta: str) -> None:
+        self.log["state"] = NORMAL
+        if not self._stream_open:
+            self.log.insert(END, "[Агент] ", "agent")
+            self._stream_open = True
+        self.log.insert(END, delta, "agent")
+        self.log.see(END)
+        self.log["state"] = DISABLED
+        self._stream_buf += delta
+
+    def _stream_close(self) -> str:
+        shown = self._stream_buf
+        if self._stream_open:
+            self.log["state"] = NORMAL
+            self.log.insert(END, "\n\n")
+            self.log.see(END)
+            self.log["state"] = DISABLED
+            self._stream_open = False
+        self._stream_buf = ""
+        return shown
 
     def _poll(self) -> None:
         try:
@@ -523,13 +555,20 @@ class ChatWindow(ttk.Frame):
         except queue.Empty:
             self.after(100, self._poll)
             return
+        if status == "stream":
+            self._stream_write(message)
+            self.after(100, self._poll)
+            return
         if status == "ok":
-            self._append_line("Агент", message)
+            shown = self._stream_close()
+            if message and message.strip() and message.strip() != shown.strip():
+                self._append_line("Агент", message)
         elif status == "activity":
             self._append_line("Система", message, color="#666")
             self.after(100, self._poll)
             return
         else:
+            self._stream_close()
             self._append_line("Ошибка", message, color="#a00")
         self._set_busy(False)
 

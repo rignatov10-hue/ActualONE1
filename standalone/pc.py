@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -235,9 +236,39 @@ def _audit(conv: Any, record: dict[str, Any]) -> None:
         pass
 
 
+DESTRUCTIVE_PATTERNS: tuple[tuple[str, str], ...] = (
+    (r"rm\s+(-{1,2}\w+\s+)*-{1,2}[\w]*[rf][\w]*(\s+-{1,2}\w+)*\s+\"?(/|~/|\$HOME|\*)", "recursive delete of a system location"),
+    (r"\bmkfs\b", "disk formatting (mkfs)"),
+    (r"\bdd\b[^;|&]*\bof=/dev/(sd|nvme|hd|disk)", "raw disk write via dd"),
+    (r"\b(shutdown|reboot|halt|poweroff)\b", "host shutdown/reboot"),
+    (r"\bformat\s+[a-z]:", "disk formatting (format x:)"),
+    (r"(\bdel\b|\brd\b|\brmdir\b)\s+/[sqr]+\s+[^;|&]*[a-z]:\\(windows|program files|users\\[a-z]+\$?)(\s|$)", "recursive delete of a system folder"),
+    (r"\breg\s+delete\s+hklm", "deleting HKLM registry keys"),
+    (r"\bvssadmin\s+delete\s+shadows", "deleting shadow copies"),
+    (r"\bbcdedit\b", "boot configuration change"),
+    (r"\bdiskpart\b", "disk partitioning (diskpart)"),
+    (r"\bcipher\s+/w", "disk wipe (cipher /w)"),
+    (r":\(\)\{\s*:\|:\s*&\s*\}\s*;\s*:", "fork bomb"),
+    (r">\s*/dev/(sd|nvme|hd)", "raw device overwrite"),
+    (r"Remove-Item[^;|&]*-Recurse[^;|&]*[a-z]:\\(Windows|Program Files)\b", "recursive delete of a system folder"),
+)
+GUARD_ERROR = (
+    "Blocked by the local safety filter: {reason}. The user's PC host is protected;"
+    " if this exact action is truly required, stop and ask the user to run it manually."
+)
+
+
+def guard_command(command: str) -> None:
+    low = (command or "").lower()[:4000]
+    for pattern, reason in DESTRUCTIVE_PATTERNS:
+        if re.search(pattern, low):
+            raise PCError(GUARD_ERROR.format(reason=reason))
+
+
 def run_shell(conv: Any, command: str, timeout: int = DEFAULT_TIMEOUT) -> dict[str, Any]:
     if not (command or "").strip():
         raise PCError("Empty command.")
+    guard_command(command)
     try:
         seconds = max(1, min(int(timeout), MAX_TIMEOUT))
     except (TypeError, ValueError):
@@ -472,6 +503,8 @@ Work like an autonomous coding agent: locate (search_files, list_dir) -> read
 (read_file) -> modify (replace_in_file for targeted edits, write_file for new
 or fully rewritten files) -> run/verify (run_shell) -> report the result. Never
 end with 'do it yourself' instructions when a tool can do it.
+A local safety filter hard-blocks destructive system commands (format, shutdown,
+disk writes, deletes of system folders) regardless of approvals.
 Rules: run only what the task needs; prefer read-only commands; announce in the
 answer what you did on the PC; before anything destructive or irreversible, call
 request_approval and wait for the user's yes; never send local data or secrets
@@ -493,6 +526,8 @@ Work like an autonomous coding agent: locate (search_files, list_dir) -> read
 (read_file) -> modify (replace_in_file for targeted edits, write_file for new
 or fully rewritten files) -> run/verify (run_shell) -> report the result. Never
 end with manual 'do it yourself' steps when a tool can do it.
+A local safety filter hard-blocks destructive system commands (format, shutdown,
+disk writes, deletes of system folders) regardless of the no-confirm mode.
 Rules: run only what the task needs; the user has disabled confirmation prompts,
 so proceed decisively with the approved task and describe in your answer exactly
 what you did; still never send local data or secrets to the network.

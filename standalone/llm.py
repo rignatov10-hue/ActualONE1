@@ -17,6 +17,10 @@ from typing import Any
 _TIMEOUT = 300
 _RETRIES = 3
 
+
+class StreamCancelled(Exception):
+    """The consumer of a token stream requested the turn to stop."""
+
 USER_AGENT = "drive-analyst-standalone/1.0"
 
 
@@ -59,6 +63,41 @@ def _post_json(url: str, headers: dict[str, str], payload: dict[str, Any], timeo
     raise LLMError(str(last or "unknown failure"))
 
 
+def _sse_lines(response: Any) -> Any:
+    """Yield parsed JSON payload strings of an SSE response ('data: ...' lines)."""
+    for raw in response:
+        if isinstance(raw, bytes):
+            raw = raw.decode("utf-8", "replace")
+        line = raw.strip()
+        if not line.startswith("data:"):
+            continue
+        data = line[5:].strip()
+        if data == "[DONE]":
+            return
+        try:
+            yield json.loads(data)
+        except json.JSONDecodeError:
+            continue
+
+
+def _stream_request(url: str, headers: dict[str, str], payload: dict[str, Any], timeout: int) -> Any:
+    data = json.dumps(payload).encode()
+    request = urllib.request.Request(
+        url, data=data, method="POST", headers={"Content-Type": "application/json", "User-Agent": USER_AGENT, **headers}
+    )
+    try:
+        return urllib.request.urlopen(request, timeout=timeout)
+    except urllib.error.HTTPError as exc:
+        body = ""
+        try:
+            body = exc.read(500).decode("utf-8", "replace")
+        except Exception:
+            pass
+        raise LLMError(f"The model server answered {exc.code}: {body[:500]}") from exc
+    except urllib.error.URLError as exc:
+        raise LLMError(f"Could not reach the model at {url}: {exc.reason}.") from exc
+
+
 class OpenAICompatClient:
     """Talks the /chat/completions wire format: KoboldCpp, Ollama, OpenAI, OpenRouter, ..."""
 
@@ -67,7 +106,7 @@ class OpenAICompatClient:
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key or "local"
 
-    def complete(self, system: str, messages: list[dict[str, Any]], tool_schemas: list[dict[str, Any]]) -> dict[str, Any]:
+    def _payload(self, system: str, messages: list[dict[str, Any]], tool_schemas: list[dict[str, Any]]) -> dict[str, Any]:
         payload_messages: list[dict[str, Any]] = [{"role": "system", "content": system}]
         for event in messages:
             role = event.get("role")
@@ -109,7 +148,20 @@ class OpenAICompatClient:
                 {"type": "function", "function": schema} for schema in tool_schemas
             ]
             payload["tool_choice"] = "auto"
-        response = _post_json(f"{self.base_url}/chat/completions", self._headers(), payload)
+        return payload
+
+    def complete(
+        self,
+        system: str,
+        messages: list[dict[str, Any]],
+        tool_schemas: list[dict[str, Any]],
+        on_delta: Any = None,
+    ) -> dict[str, Any]:
+        payload = self._payload(system, messages, tool_schemas)
+        if on_delta is None:
+            response = _post_json(f"{self.base_url}/chat/completions", self._headers(), payload)
+        else:
+            response = self._stream(payload, on_delta)
         try:
             message = response["choices"][0]["message"]
         except (KeyError, IndexError, TypeError) as exc:
@@ -131,6 +183,49 @@ class OpenAICompatClient:
             )
         return {"content": message.get("content"), "tool_calls": tool_calls}
 
+    def _stream(self, payload: dict[str, Any], on_delta: Any) -> dict[str, Any]:
+        stream_payload = dict(payload)
+        stream_payload["stream"] = True
+        content_parts: list[str] = []
+        calls: dict[int, dict[str, Any]] = {}
+        try:
+            with _stream_request(f"{self.base_url}/chat/completions", self._headers(), stream_payload, _TIMEOUT) as response:
+                for event in _sse_lines(response):
+                    choices = event.get("choices") or [{}]
+                    delta = choices[0].get("delta") or {}
+                    piece = delta.get("content")
+                    if piece:
+                        content_parts.append(piece)
+                        on_delta(piece)
+                    for fragment in delta.get("tool_calls") or []:
+                        index = fragment.get("index", 0)
+                        slot = calls.setdefault(index, {"id": "", "name": "", "arguments": ""})
+                        if fragment.get("id"):
+                            slot["id"] = fragment["id"]
+                        function = fragment.get("function") or {}
+                        if function.get("name"):
+                            slot["name"] += function["name"] if not slot["name"] else ""
+                        if function.get("arguments"):
+                            slot["arguments"] += function["arguments"]
+        except StreamCancelled:
+            raise
+        except LLMError:
+            raise
+        except Exception as exc:
+            raise LLMError(f"Stream failed: {exc}") from exc
+        tool_calls = []
+        for index in sorted(calls):
+            slot = calls[index]
+            try:
+                arguments = json.loads(slot["arguments"]) if slot["arguments"].strip() else {}
+            except json.JSONDecodeError:
+                arguments = {}
+            tool_calls.append({"id": slot["id"] or f"call_{index}", "name": slot["name"], "arguments": arguments})
+        return {"choices": [{"message": {"content": "".join(content_parts) or None, "tool_calls": [
+            {"id": c["id"], "function": {"name": c["name"], "arguments": json.dumps(c["arguments"], ensure_ascii=False)}}
+            for c in tool_calls
+        ]}}]}
+
     def _headers(self) -> dict[str, str]:
         return {"Authorization": f"Bearer {self.api_key}"}
 
@@ -146,7 +241,7 @@ class AnthropicClient:
         self.api_key = api_key
         self.base_url = (base_url or self.BASE_URL).rstrip("/")
 
-    def complete(self, system: str, messages: list[dict[str, Any]], tool_schemas: list[dict[str, Any]]) -> dict[str, Any]:
+    def _build_messages(self, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
         payload_messages: list[dict[str, Any]] = []
         seen_tool_results: set[str] = set()
         for event in messages:
@@ -178,22 +273,35 @@ class AnthropicClient:
                     last["content"].append(result_block)
                 else:
                     payload_messages.append({"role": "user", "content": [result_block]})
+        return payload_messages
+
+    def _payload(self, system: str, messages: list[dict[str, Any]], tool_schemas: list[dict[str, Any]]) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "model": self.model,
             "max_tokens": 4096,
             "system": system,
-            "messages": payload_messages,
+            "messages": self._build_messages(messages),
         }
         if tool_schemas:
             payload["tools"] = [
                 {"name": schema["name"], "description": schema["description"], "input_schema": schema["parameters"]}
                 for schema in tool_schemas
             ]
-        response = _post_json(
-            f"{self.base_url}/messages",
-            {"x-api-key": self.api_key, "anthropic-version": self.VERSION},
-            payload,
-        )
+        return payload
+
+    def complete(
+        self,
+        system: str,
+        messages: list[dict[str, Any]],
+        tool_schemas: list[dict[str, Any]],
+        on_delta: Any = None,
+    ) -> dict[str, Any]:
+        payload = self._payload(system, messages, tool_schemas)
+        headers = {"x-api-key": self.api_key, "anthropic-version": self.VERSION}
+        if on_delta is None:
+            response = _post_json(f"{self.base_url}/messages", headers, payload)
+        else:
+            response = self._stream(payload, headers, on_delta)
         text: str | None = None
         tool_calls = []
         for block in response.get("content") or []:
@@ -212,6 +320,51 @@ class AnthropicClient:
             raise LLMError("The model hit its output limit before answering.")
         return {"content": text, "tool_calls": tool_calls}
 
+    def _stream(self, payload: dict[str, Any], headers: dict[str, str], on_delta: Any) -> dict[str, Any]:
+        stream_payload = dict(payload)
+        stream_payload["stream"] = True
+        text_parts: list[str] = []
+        calls: dict[int, dict[str, Any]] = {}
+
+        def slot_for(index: int) -> dict[str, Any]:
+            return calls.setdefault(index, {"id": "", "name": "", "arguments": ""})
+
+        try:
+            with _stream_request(f"{self.base_url}/messages", headers, stream_payload, _TIMEOUT) as response:
+                for event in _sse_lines(response):
+                    kind = event.get("type")
+                    if kind == "content_block_start":
+                        block = event.get("content_block") or {}
+                        if block.get("type") == "tool_use":
+                            slot = slot_for(int(event.get("index", 0)))
+                            slot["id"] = block.get("id") or slot["id"]
+                            slot["name"] = block.get("name") or slot["name"]
+                    elif kind == "content_block_delta":
+                        delta = event.get("delta") or {}
+                        index = int(event.get("index", 0))
+                        if delta.get("type") == "text_delta" and delta.get("text"):
+                            text_parts.append(delta["text"])
+                            on_delta(delta["text"])
+                        elif delta.get("type") == "input_json_delta":
+                            slot_for(index)["arguments"] += delta.get("partial_json") or ""
+        except (StreamCancelled, LLMError):
+            raise
+        except Exception as exc:
+            raise LLMError(f"Stream failed: {exc}") from exc
+        content: list[dict[str, Any]] = []
+        joined = "".join(text_parts)
+        if joined:
+            content.append({"type": "text", "text": joined})
+        for index in sorted(calls):
+            slot = calls[index]
+            try:
+                arguments = json.loads(slot["arguments"]) if slot["arguments"].strip() else {}
+            except json.JSONDecodeError:
+                arguments = {}
+            content.append(
+                {"type": "tool_use", "id": slot["id"] or f"call_{index}", "name": slot["name"], "input": arguments}
+            )
+        return {"content": content, "stop_reason": "end_turn"}
 
 # Provider presets: name -> (base_url, env var of the key)
 OPENAI_COMPATIBLE_PRESETS: dict[str, tuple[str, str]] = {
