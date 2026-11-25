@@ -237,6 +237,7 @@ class SettingsFrame(ttk.Frame):
         "together": "api.together.xyz/v1 + ключ",
         "mistral-api": "api.mistral.ai/v1 + ключ mstrl_...",
         "anthropic": "Claude: ключ с console.anthropic.com вставь в поле «API-ключ» (модель можно не менять)",
+        "custom": "Любой сервис: вставь адрес /v1 в поле «Адрес», ключ и модель (кнопка «МОДЕЛИ» покажет список)",
     }
     PROVIDERS = list(PRESET_HINTS)
 
@@ -257,6 +258,11 @@ class SettingsFrame(ttk.Frame):
                     width=38,
                 )
                 widget.bind("<<ComboboxSelected>>", lambda event: self._update_hint())
+            elif key == "model":
+                widget = ttk.Combobox(self, textvariable=variable, values=[], width=38)
+                self.model_combo = widget
+                models_button = ttk.Button(self, text="МОДЕЛИ", command=self._fetch_models)
+                models_button.grid(row=row, column=2, sticky=W, pady=3)
             else:
                 show = "•" if key == "api_key" else None
                 widget = ttk.Entry(self, textvariable=variable, width=40, show=show)
@@ -374,6 +380,28 @@ class SettingsFrame(ttk.Frame):
 
     def refresh_google_status(self) -> None:
         self.google_status["text"] = self._google_status_text()
+
+    def _fetch_models(self) -> None:
+        from . import llm
+
+        provider = self.vars["provider"].get().strip()
+        base = self.vars["base_url"].get().strip()
+        try:
+            resolved = llm.resolve_base_url(provider, base or None)
+            if not resolved:
+                self.hint["text"] = "Вставь адрес /v1 в поле «Адрес» (например https://api.openai.com/v1)"
+                return
+            ids = llm.list_models(resolved, self.vars["api_key"].get().strip() or None, provider)
+        except Exception as exc:
+            self.hint["text"] = f"Список моделей не получен: {exc}"
+            return
+        if not ids:
+            self.hint["text"] = "Сервис не вернул моделей — впиши модель вручную"
+            return
+        self.model_combo["values"] = ids
+        if not self.vars["model"].get().strip():
+            self.vars["model"].set(ids[0])
+        self.hint["text"] = f"Найдено моделей: {len(ids)} — выбери в поле «Модель» или впиши свою"
 
 
 def make_client(config: dict):

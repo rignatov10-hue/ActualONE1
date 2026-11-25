@@ -230,6 +230,14 @@ Flags: `-c` conversation name (its own memory), `-p` provider preset or URL,
   подставится разумная по умолчанию, но лучше указать свою.
 - **Локалка (KoboldCpp)**: провайдер `kobold`, ключ не нужен — только
   запущенный KoboldCpp на порту 5001.
+- **Любой другой сервис** (xAI, Gemini через OpenAI-совместимый прокси,
+  OpenRouter-прокси и любой selfhosted сервер): провайдер `custom` (или впиши любое имя),
+  в поле «Адрес» — `/v1`-адрес сервиса, ключ — в «API-ключ». Кнопка
+  **«МОДЕЛИ»** рядом с полем «Модель» скачает список моделей этого сервиса
+  прямо в выпадающий список (если модель оставить пустой, агент сам возьмёт
+  первую доступную). Для Claude-соседних сервисов провайдер `anthropic` тоже
+  принимает свой адрес в поле «Адрес».
+- В CLI список моделей: `python -m standalone.cli --list-models -b https://api.openai.com/v1 -k sk-...`.
 
 Then just chat: paste a Google Drive link (or an https URL to a CSV, or a local
 path) and ask questions. Follow-ups remember the file and everything discussed.

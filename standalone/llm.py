@@ -368,6 +368,7 @@ class AnthropicClient:
 
 # Provider presets: name -> (base_url, env var of the key)
 OPENAI_COMPATIBLE_PRESETS: dict[str, tuple[str, str]] = {
+    "custom": ("http://127.0.0.1:5001/v1", "OPENAI_API_KEY"),
     "kobold": ("http://127.0.0.1:5001/v1", "OPENAI_API_KEY"),
     "ollama": ("http://127.0.0.1:11434/v1", "OPENAI_API_KEY"),
     "lmstudio": ("http://127.0.0.1:1234/v1", "OPENAI_API_KEY"),
@@ -381,6 +382,84 @@ OPENAI_COMPATIBLE_PRESETS: dict[str, tuple[str, str]] = {
 }
 
 
+MODEL_DEFAULTS: dict[str, str] = {
+    "kobold": "local-model",
+    "custom": "local-model",
+    "deepseek": "deepseek-chat",
+    "openai": "gpt-4o-mini",
+    "openrouter": "openai/gpt-4o-mini",
+    "groq": "llama-3.3-70b-versatile",
+    "mistral-api": "mistral-large-latest",
+    "together": "meta-llama/Llama-3.3-70B-Instruct-Turbo",
+}
+ANTHROPIC_DEFAULT_MODEL = "claude-sonnet-4-5"
+LOCAL_URL_PREFIXES = ("http://127.", "http://localhost", "http://[::1]")
+
+
+def resolve_base_url(provider: str | None, base_url: str | None) -> str:
+    """Effective URL: an explicit URL wins over the preset address."""
+    name = (provider or "").strip().lower().replace("_", "-")
+    if name.startswith("http"):
+        return name.strip().rstrip("/")
+    preset = OPENAI_COMPATIBLE_PRESETS.get(name)
+    if preset:
+        return (base_url or preset[0]).strip().rstrip("/")
+    if name in {"anthropic", "claude"}:
+        return (base_url or "https://api.anthropic.com/v1").strip().rstrip("/")
+    return (base_url or "").strip().rstrip("/")
+
+
+def resolve_api_key(provider: str | None, api_key: str | None) -> str:
+    import os
+
+    if api_key:
+        return api_key
+    name = (provider or "").strip().lower().replace("_", "-")
+    if name in {"anthropic", "claude"}:
+        return os.environ.get("ANTHROPIC_API_KEY", "")
+    preset = OPENAI_COMPATIBLE_PRESETS.get(name)
+    if preset:
+        return os.environ.get(preset[1], "")
+    return os.environ.get("OPENAI_API_KEY", "")
+
+
+def list_models(base_url: str, api_key: str | None = None, provider: str | None = None) -> list[str]:
+    """Fetch model ids from an OpenAI-compatible /models endpoint (Anthropic too)."""
+    base = (base_url or "").strip().rstrip("/")
+    if not base:
+        raise LLMError("Set the base URL first (for example https://api.openai.com/v1).")
+    name = (provider or "").strip().lower().replace("_", "-")
+    url = base if base.endswith("/models") else f"{base}/models"
+    if name in {"anthropic", "claude"} or "api.anthropic.com" in base:
+        headers = {"x-api-key": api_key or "", "anthropic-version": "2023-06-01"}
+    else:
+        headers = {"Authorization": f"Bearer {api_key or 'local'}"}
+    request = urllib.request.Request(url, headers=headers, method="GET")
+    try:
+        with urllib.request.urlopen(request, timeout=15) as response:
+            payload = json.loads(response.read(1_000_000).decode("utf-8", errors="replace"))
+    except Exception as exc:
+        raise LLMError(f"Could not list models at {url}: {exc}") from None
+    items = payload.get("data") if isinstance(payload, dict) else payload
+    ids: list[str] = []
+    for item in items or []:
+        if isinstance(item, dict):
+            model_id = item.get("id") or item.get("name")
+        else:
+            model_id = str(item)
+        if model_id:
+            ids.append(str(model_id))
+    return sorted(set(ids))
+
+
+def _first_model(base_url: str, api_key: str | None) -> str | None:
+    try:
+        ids = list_models(base_url, api_key)
+    except LLMError:
+        return None
+    return ids[0] if ids else None
+
+
 def build_client(provider: str, model: str | None, base_url: str | None, api_key: str | None) -> Any:
     import os
 
@@ -391,27 +470,38 @@ def build_client(provider: str, model: str | None, base_url: str | None, api_key
         key = api_key or os.environ.get("ANTHROPIC_API_KEY", "")
         if not key:
             raise LLMError("Set ANTHROPIC_API_KEY (or pass --api-key).")
-        return AnthropicClient(model or "claude-sonnet-4-5", key, base_url)
-    if provider in OPENAI_COMPATIBLE_PRESETS:
-        base_url, key_env = OPENAI_COMPATIBLE_PRESETS[provider]
-        key = api_key or os.environ.get(key_env) or ("local" if base_url.startswith("http://127") or base_url.startswith("http://localhost") else "")
+        url = (base_url or "https://api.anthropic.com/v1").rstrip("/")
+        return AnthropicClient(model or ANTHROPIC_DEFAULT_MODEL, key, url)
+    if provider in OPENAI_COMPATIBLE_PRESETS and provider != "custom":
+        preset_url, key_env = OPENAI_COMPATIBLE_PRESETS[provider]
+        chosen_base = (base_url or preset_url).rstrip("/")
+        local = chosen_base.startswith(LOCAL_URL_PREFIXES)
+        key = api_key or os.environ.get(key_env) or ("local" if local else "")
         if not key:
             raise LLMError(f"Set {key_env} (or pass --api-key) for provider '{provider}'.")
-        models = {
-            "kobold": "local-model",
-            "deepseek": "deepseek-chat",
-            "openai": "gpt-4o-mini",
-            "openrouter": "openai/gpt-4o-mini",
-            "groq": "llama-3.3-70b-versatile",
-            "mistral-api": "mistral-large-latest",
-            "together": "meta-llama/Llama-3.3-70B-Instruct-Turbo",
-        }
-        return OpenAICompatClient(model or models.get(provider, provider), base_url, key)
+        chosen_model = model
+        if not chosen_model and base_url and base_url.rstrip("/") != preset_url:
+            chosen_model = _first_model(chosen_base, key)
+        return OpenAICompatClient(chosen_model or MODEL_DEFAULTS.get(provider, provider), chosen_base, key)
     if provider == "custom":
+        url = (base_url or "http://127.0.0.1:5001/v1").rstrip("/")
         return OpenAICompatClient(
-            model or "local-model",
-            base_url or "http://127.0.0.1:5001/v1",
+            model or ("local-model" if not base_url else _first_model(url, api_key) or "default"),
+            url,
             api_key or os.environ.get("OPENAI_API_KEY") or "local",
         )
-    known = ", ".join(sorted(OPENAI_COMPATIBLE_PRESETS)) + ", anthropic, or a full URL"
-    raise LLMError(f"Unknown provider '{provider}'. Use one of: {known}.")
+    url = (base_url or "").rstrip("/")
+    if not url:
+        known = ", ".join(sorted(OPENAI_COMPATIBLE_PRESETS)) + ", anthropic, custom, or a full URL"
+        raise LLMError(
+            f"Unknown provider '{provider}'. Add a URL field with the"
+            f" /v1 address of any OpenAI-compatible service, or use one of: {known}."
+        )
+    local = url.startswith(LOCAL_URL_PREFIXES)
+    key = api_key or os.environ.get("OPENAI_API_KEY", "")
+    if not key and not local:
+        raise LLMError(
+            f"Add the API key for {url} (any key of that service), or use one of the named presets."
+        )
+    chosen_model = model or _first_model(url, key) or "default"
+    return OpenAICompatClient(chosen_model, url, key or "local")

@@ -44,6 +44,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--skills-dir", help=f"Folder with skill files (default {os.environ.get('ANALYST_SKILLS_DIR', '<project>/skills')}).")
     parser.add_argument("--pc", action="store_true", help="Enable local PC control tools for this session (audit: pc_log.jsonl).")
     parser.add_argument("--list", action="store_true", help="List saved conversations and exit.")
+    parser.add_argument("--list-models", action="store_true", help="List models available at the provider and exit.")
     parser.add_argument("-e", "--env-file", help="Optional .env file to load before anything else.")
     return parser
 
@@ -82,6 +83,25 @@ def main(argv: list[str] | None = None) -> int:
     if args.list:
         saved = list_conversations(args.memory_dir)
         print("Saved conversations:", ", ".join(saved) if saved else "(none yet)")
+        return 0
+
+    if args.list_models:
+        from .llm import list_models, resolve_api_key, resolve_base_url
+
+        provider = args.provider or os.environ.get("ANALYST_PROVIDER", "")
+        base_url = args.base_url or os.environ.get("ANALYST_LLM_BASE_URL") or None
+        try:
+            base = resolve_base_url(provider, base_url)
+            if not base:
+                print("Error: set the base URL (-b / ANALYST_LLM_BASE_URL) or a known provider.", file=sys.stderr)
+                return 2
+            models = list_models(base, resolve_api_key(provider, args.api_key), provider)
+        except Exception as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            return 2
+        print(f"Models at {base}:")
+        for model_id in models:
+            print(f"  {model_id}")
         return 0
 
     provider = args.provider or os.environ.get("ANALYST_PROVIDER", "")
