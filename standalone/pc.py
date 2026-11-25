@@ -29,6 +29,8 @@ MAX_TIMEOUT = 120
 MAX_WRITE_CHARS = 200000
 MAX_REPLACE_CHARS = 500000
 MAX_SEARCH_RESULTS = 200
+MAX_DRAW_CMDS = 500
+MAX_DRAW_SIZE = 4096
 SKIP_DIRS = {".git", "__pycache__", "node_modules", ".venv", "venv", "AppData", "$RECYCLE.BIN", "Windows"}
 MAX_ENTRIES = 500
 AUDIT_NAME = "pc_log.jsonl"
@@ -72,6 +74,17 @@ def desktop_dir() -> Path:
 
 
 DESKTOP_FIRST = {"desktop", "рабочий стол", "рабочем столе", "рабочего стола"}
+
+
+def _draw_px(value: Any, size: int) -> float:
+    """Map a 0-1000 grid coordinate to pixels; larger values are absolute pixels."""
+    try:
+        coord = float(value)
+    except (TypeError, ValueError):
+        raise PCError(f"Invalid coordinate value: {value!r}") from None
+    if coord > 1000:
+        return max(0.0, min(coord, float(size)))
+    return max(0.0, min(coord, 1000.0)) * size / 1000.0
 
 
 def smart_path(path: str) -> Path:
@@ -203,6 +216,26 @@ def _file_tools_schema() -> list[dict[str, Any]]:
                     "max_chars": {"type": "integer", "description": f"Characters to return (default {DEFAULT_MAX_CHARS})."},
                 },
                 "required": ["url"],
+            },
+        },
+        {
+            "name": "draw_image",
+            "description": (
+                "Draw a PNG picture on the user's PC from primitive commands (rect,"
+                " ellipse, line, polygon, text) on a 0-1000 coordinate grid. Good for"
+                " logos, schemas, charts-as-pictures and simple art; open the result"
+                " with open_path."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Output PNG path: absolute, '~/...', 'Desktop/<name>' (the real Desktop), or relative to the user profile. '.png' is appended automatically."},
+                    "commands": {"type": "string", "description": "JSON array of primitives: {\"shape\":\"rect\"|\"ellipse\"|\"line\",\"xy\":[x1,y1,x2,y2]}, {\"shape\":\"polygon\",\"points\":[x1,y1,x2,y2,x3,y3,...]}, {\"shape\":\"text\",\"xy\":[x,y],\"text\":\"...\",\"size\":24}. Every object supports \"fill\" (CSS color like '#2233ff'), rect/ellipse/line also \"outline\" and \"width\"."},
+                    "width": {"type": "integer", "description": "Image width in pixels (default 1024, max 4096)."},
+                    "height": {"type": "integer", "description": "Image height in pixels (default 1024, max 4096)."},
+                    "background": {"type": "string", "description": "Background CSS color (default '#ffffff')."},
+                },
+                "required": ["path", "commands"],
             },
         },
         {
@@ -454,6 +487,144 @@ def web_read(conv: Any, url: str, max_chars: int = DEFAULT_MAX_CHARS) -> dict[st
     return result
 
 
+def _draw_font(size: int) -> Any:
+    from PIL import ImageFont
+
+    for name in ("arial.ttf", "consolas.ttf", "DejaVuSans.ttf"):
+        try:
+            return ImageFont.truetype(name, size)
+        except OSError:
+            continue
+    try:
+        return ImageFont.load_default(size)
+    except TypeError:
+        return ImageFont.load_default()
+
+
+def _apply_draw_command(draw: Any, cmd: Any, index: int, width: int, height: int) -> None:
+    if not isinstance(cmd, dict):
+        raise PCError(f"Command #{index} is not an object.")
+    shape = str(cmd.get("shape") or cmd.get("type") or "").strip().lower()
+    fill = cmd.get("fill") or cmd.get("color") or "#000000"
+    xy = cmd.get("xy") or cmd.get("coords") or cmd.get("box")
+    try:
+        if shape == "rect" or shape == "rectangle":
+            if not isinstance(xy, (list, tuple)) or len(xy) != 4:
+                raise PCError(f"Command #{index} ('rect') needs xy = [x1, y1, x2, y2].")
+            box = [
+                _draw_px(xy[0], width),
+                _draw_px(xy[1], height),
+                _draw_px(xy[2], width),
+                _draw_px(xy[3], height),
+            ]
+            draw.rectangle(box, fill=fill, outline=cmd.get("outline") or fill, width=int(cmd.get("width", 1) or 1))
+        elif shape == "ellipse" or shape == "circle":
+            if not isinstance(xy, (list, tuple)) or len(xy) != 4:
+                raise PCError(f"Command #{index} ('ellipse') needs xy = [x1, y1, x2, y2].")
+            box = [
+                _draw_px(xy[0], width),
+                _draw_px(xy[1], height),
+                _draw_px(xy[2], width),
+                _draw_px(xy[3], height),
+            ]
+            draw.ellipse(box, fill=fill, outline=cmd.get("outline") or fill, width=int(cmd.get("width", 1) or 1))
+        elif shape == "line":
+            if not isinstance(xy, (list, tuple)) or len(xy) != 4:
+                raise PCError(f"Command #{index} ('line') needs xy = [x1, y1, x2, y2].")
+            draw.line(
+                [_draw_px(xy[0], width), _draw_px(xy[1], height), _draw_px(xy[2], width), _draw_px(xy[3], height)],
+                fill=fill,
+                width=max(1, int(cmd.get("width", 2) or 2)),
+            )
+        elif shape == "polygon":
+            points = cmd.get("points") or xy
+            if not isinstance(points, (list, tuple)) or len(points) < 6:
+                raise PCError(f"Command #{index} ('polygon') needs points = [x1, y1, x2, y2, x3, y3, ...].")
+            flat: list[float] = []
+            for value in points:
+                if isinstance(value, (list, tuple)) and len(value) == 2:
+                    flat.extend([_draw_px(value[0], width), _draw_px(value[1], height)])
+                else:
+                    flat.append(_draw_px(value, width))
+            if len(flat) % 2 or len(flat) < 6:
+                raise PCError(f"Command #{index} ('polygon') has unpaired coordinates.")
+            draw.polygon(list(zip(flat[0::2], flat[1::2])), fill=fill, outline=cmd.get("outline") or fill)
+        elif shape == "text":
+            message = str(cmd.get("text", ""))
+            if not message:
+                raise PCError(f"Command #{index} ('text') has empty text.")
+            if not isinstance(xy, (list, tuple)) or len(xy) != 2:
+                raise PCError(f"Command #{index} ('text') needs xy = [x, y].")
+            size = max(6, min(int(cmd.get("size", 24) or 24), 400))
+            draw.text(
+                (_draw_px(xy[0], width), _draw_px(xy[1], height)),
+                message,
+                fill=fill,
+                font=_draw_font(size),
+            )
+        else:
+            raise PCError(
+                f"Command #{index}: unknown shape {shape!r}; use rect, ellipse, line, polygon or text."
+            )
+    except PCError:
+        raise
+    except (ValueError, TypeError, OSError) as exc:
+        raise PCError(f"Command #{index} failed: {exc}") from None
+
+
+def draw_image(
+    conv: Any,
+    path: str,
+    commands: Any,
+    width: int = 1024,
+    height: int = 1024,
+    background: str = "#ffffff",
+) -> dict[str, Any]:
+    """Render a PNG picture on the user's PC from primitive drawing commands."""
+    try:
+        from PIL import Image, ImageDraw
+    except ImportError:
+        raise PCError("Pillow is not installed - run: pip install pillow") from None
+    if isinstance(commands, str):
+        try:
+            commands = json.loads(commands)
+        except json.JSONDecodeError:
+            raise PCError("commands is not valid JSON - pass a JSON array of objects.") from None
+    if not isinstance(commands, list) or not commands:
+        raise PCError("commands must be a non-empty JSON array of primitive objects.")
+    if len(commands) > MAX_DRAW_CMDS:
+        raise PCError(f"Too many commands ({len(commands)}, max {MAX_DRAW_CMDS}).")
+    try:
+        w = max(16, min(int(width), MAX_DRAW_SIZE))
+        h = max(16, min(int(height), MAX_DRAW_SIZE))
+    except (TypeError, ValueError):
+        w = h = 1024
+    target = smart_path(path)
+    if target.suffix.lower() != ".png":
+        target = target.with_suffix(".png")
+    try:
+        image = Image.new("RGB", (w, h), background)
+    except (ValueError, TypeError):
+        raise PCError(f"Invalid background color: {background!r}") from None
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise PCError(f"Could not create folder: {exc}") from None
+    draw = ImageDraw.Draw(image)
+    for index, cmd in enumerate(commands):
+        _apply_draw_command(draw, cmd, index, w, h)
+    try:
+        image.save(target, "PNG")
+    except (OSError, ValueError) as exc:
+        raise PCError(f"Could not save image: {exc}") from None
+    result = {"path": str(target.resolve()), "size": [w, h], "shapes": len(commands)}
+    _audit(
+        conv,
+        {"time": time.strftime("%Y-%m-%dT%H:%M:%S"), "tool": "draw_image", "path": str(target), "shapes": len(commands)},
+    )
+    return result
+
+
 def _launch(target: str) -> None:
     if hasattr(os, "startfile"):
         os.startfile(target)  # type: ignore[attr-defined]
@@ -492,17 +663,21 @@ PC_IMPLS: dict[str, Callable[..., dict[str, Any]]] = {
     "open_path": open_path,
     "open_url": open_url,
     "web_read": web_read,
+    "draw_image": draw_image,
 }
 
 PC_SECTION = """
 
 Local PC tools (the user enables them explicitly, every action is audit-logged in
 pc_log.jsonl): run_shell, list_dir, read_file, write_file, replace_in_file,
-search_files, open_path, open_url, web_read.
+search_files, open_path, open_url, web_read, draw_image.
 Work like an autonomous coding agent: locate (search_files, list_dir) -> read
 (read_file) -> modify (replace_in_file for targeted edits, write_file for new
 or fully rewritten files) -> run/verify (run_shell) -> report the result. Never
 end with 'do it yourself' instructions when a tool can do it.
+draw_image renders a PNG picture from primitive commands (rect/ellipse/line/
+polygon/text, coordinates on a 0-1000 grid) - draw logos, schemas and simple
+art to 'Desktop/<name>' and open the file with open_path so the user sees it.
 A local safety filter hard-blocks destructive system commands (format, shutdown,
 disk writes, deletes of system folders) regardless of approvals.
 Rules: run only what the task needs; prefer read-only commands; announce in the
@@ -521,7 +696,7 @@ PC_SECTION_AUTO = """
 
 Local PC tools (the user enables them explicitly, every action is audit-logged in
 pc_log.jsonl): run_shell, list_dir, read_file, write_file, replace_in_file,
-search_files, open_path, open_url, web_read.
+search_files, open_path, open_url, web_read, draw_image.
 Work like an autonomous coding agent: locate (search_files, list_dir) -> read
 (read_file) -> modify (replace_in_file for targeted edits, write_file for new
 or fully rewritten files) -> run/verify (run_shell) -> report the result. Never

@@ -13,9 +13,9 @@ if errorlevel 1 (
   exit /b 1
 )
 
-echo Installing dependencies (pandas, pyarrow, openpyxl, pyinstaller)...
+echo Installing dependencies (pandas, pyarrow, openpyxl, pillow, pyinstaller)...
 python -m pip install --upgrade pip >nul
-python -m pip install pandas pyarrow openpyxl pyinstaller
+python -m pip install pandas pyarrow openpyxl pillow pyinstaller
 if errorlevel 1 (
   echo Failed to install dependencies. Check your internet connection.
   pause
