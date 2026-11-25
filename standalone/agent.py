@@ -5,8 +5,10 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from . import pc as pc_mod
 from .llm import AnthropicClient, OpenAICompatClient
 from .memory import Conversation
+from .pc import PCError
 from .skills import (
     SKILL_TOOL_SCHEMA,
     SkillError,
@@ -40,21 +42,28 @@ How to work:
 6. If a question mentions a column that does not exist, list available columns instead of
    guessing.
 
-Your only capabilities are the five fixed tools plus load_skill for reading user skills. You
-cannot run code, open a shell, edit files, or fetch the web. Stay within the tools and never
-promise otherwise.
+Your capabilities are fixed tools only: the five data tools, load_skill for reading user skills,
+and - only when listed in these instructions - the user-enabled local PC tools. You cannot write
+and run arbitrary code, use shells beyond the listed PC tools, or fetch the web beyond open_url.
+Stay within the tools and never promise otherwise.
 """
 
 
 def _system_state() -> tuple[str, list[dict[str, Any]]]:
-    """Instructions and tool schemas for this turn: skills are re-read every turn."""
+    """Instructions and tool schemas for this turn: skills and PC tools are re-read every turn."""
     try:
         skills = discover_skills()
     except OSError:
         skills = []
-    if not skills:
-        return INSTRUCTIONS, list(TOOL_SCHEMAS)
-    return INSTRUCTIONS + build_section(skills), list(TOOL_SCHEMAS) + [SKILL_TOOL_SCHEMA]
+    instructions = INSTRUCTIONS
+    schemas = list(TOOL_SCHEMAS)
+    if skills:
+        instructions += build_section(skills)
+        schemas.append(SKILL_TOOL_SCHEMA)
+    if pc_mod.enabled():
+        instructions += pc_mod.PC_SECTION
+        schemas.extend(pc_mod.PC_TOOL_SCHEMAS)
+    return instructions, schemas
 
 
 def execute_tool(conv: Conversation, call: dict[str, Any]) -> str:
@@ -64,6 +73,19 @@ def execute_tool(conv: Conversation, call: dict[str, Any]) -> str:
         try:
             return json.dumps(run_load_skill(arguments.get("name", "")), ensure_ascii=False, default=str)
         except SkillError as exc:
+            return json.dumps({"error": str(exc)}, ensure_ascii=False)
+        except TypeError as exc:
+            return json.dumps({"error": f"Bad arguments for '{name}': {exc}."}, ensure_ascii=False)
+    if name in pc_mod.PC_IMPLS:
+        if not pc_mod.enabled():
+            return json.dumps(
+                {"error": "PC tools are disabled. The user must enable 'Управление ПК' in the settings first."},
+                ensure_ascii=False,
+            )
+        try:
+            result = pc_mod.PC_IMPLS[name](conv, **arguments)
+            return json.dumps(result, ensure_ascii=False, default=str)
+        except PCError as exc:
             return json.dumps({"error": str(exc)}, ensure_ascii=False)
         except TypeError as exc:
             return json.dumps({"error": f"Bad arguments for '{name}': {exc}."}, ensure_ascii=False)

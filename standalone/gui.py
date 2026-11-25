@@ -233,8 +233,15 @@ class SettingsFrame(ttk.Frame):
         skills_button = ttk.Button(self, text="ПАПКА НАВЫКОВ", command=self._open_skills_folder)
         skills_button.grid(row=google_row + 1, column=2, sticky=W, pady=4)
 
+        self.pc_var = tk.BooleanVar(value=str(stored.get("pc_tools")) == "1")
+        ttk.Checkbutton(
+            self,
+            text="О П К // Разрешить управление этим ПК (команды, файлы, запуск VM; журнал: pc_log.jsonl)",
+            variable=self.pc_var,
+        ).grid(row=google_row + 2, column=0, columnspan=3, sticky=W, pady=6)
+
         start = ttk.Button(self, text=">>  ЗАПУСТИТЬ ЧАТ", style="Accent.TButton", command=self._start)
-        start.grid(row=google_row + 2, column=0, columnspan=3, pady=(18, 8))
+        start.grid(row=google_row + 3, column=0, columnspan=3, pady=(18, 8))
         self.columnconfigure(1, weight=1)
         self._update_hint()
 
@@ -300,7 +307,11 @@ class SettingsFrame(ttk.Frame):
         self.hint["text"] = self.PRESET_HINTS.get(provider.lower().replace("_", "-"), "")
 
     def _start(self) -> None:
+        from . import pc as pc_mod
+
+        pc_mod.set_enabled(bool(self.pc_var.get()))
         config = self.values()
+        config["pc_tools"] = "1" if self.pc_var.get() else ""
         save_config(config)
         try:
             client = make_client(config)
