@@ -186,6 +186,27 @@ def list_conversations(root: Path | str | None = None) -> list[str]:
         return []
     return sorted(path.stem for path in directory.glob("*.jsonl"))
 
+
+def delete_conversation(root: Path | str | None, name: str) -> bool:
+    """Remove a conversation's history and dataset files; True when anything was deleted."""
+    root = Path(root or MEMORY_ROOT).resolve()
+    clean = safe_name(name)
+    removals = (
+        root / "conversations" / f"{clean}.jsonl",
+        root / "datasets" / f"{clean}.parquet",
+        root / "datasets" / f"{clean}.meta.json",
+        root / "datasets" / f"{clean}.scope.parquet",
+    )
+    removed = False
+    for path in removals:
+        if path.exists():
+            try:
+                path.unlink()
+                removed = True
+            except OSError:
+                pass
+    return removed
+
 # ---- long-term facts (cross-conversation) ------------------------------------
 
 FACTS_NAME = "facts.json"

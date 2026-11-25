@@ -409,3 +409,15 @@ def test_gui_config_roundtrip(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     assert stored["provider"] == "kobold"
     assert stored["model"] == "qwen-local"
     assert (tmp_path / "gui_config.json").exists()
+
+
+def test_list_and_delete_conversations(tmp_path: Path):
+    conv = memory.Conversation("dialog-a", tmp_path).load()
+    conv.append({"role": "user", "content": "привет", "time": memory.utc_now()})
+    memory.Conversation("dialog-b", tmp_path).load().append(
+        {"role": "user", "content": "второй", "time": memory.utc_now()}
+    )
+    assert memory.list_conversations(tmp_path) == ["dialog-a", "dialog-b"]
+    assert memory.delete_conversation(tmp_path, "dialog-a") is True
+    assert memory.list_conversations(tmp_path) == ["dialog-b"]
+    assert memory.delete_conversation(tmp_path, "nope") is False

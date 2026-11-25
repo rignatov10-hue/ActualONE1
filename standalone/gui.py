@@ -30,6 +30,7 @@ from tkinter import (
     X,
     Y,
     messagebox,
+    simpledialog,
     ttk,
 )
 
@@ -71,6 +72,10 @@ class GradientBanner(tk.Canvas):
         self.banner_subtitle = subtitle
         self.photo: tk.PhotoImage | None = None
         self.bind("<Configure>", self._redraw)
+
+    def set_subtitle(self, subtitle: str) -> None:
+        self.banner_subtitle = subtitle
+        self._redraw()
 
     def _redraw(self, event=None) -> None:
         width = max(self.winfo_width(), 1)
@@ -393,14 +398,46 @@ class ChatWindow(ttk.Frame):
         self.conversation = conversation
         self.queue: "queue.Queue[tuple[str, str]]" = queue.Queue()
 
-        GradientBanner(
+        self.banner = GradientBanner(
             self,
             "ACTUALONE",
             f">> диалог: {conversation.name}   //   память: {conversation.root}",
             height=70,
-        ).pack(fill=X, pady=(0, 4))
+        )
+        self.banner.pack(fill=X, pady=(0, 4))
 
-        console = ttk.Frame(self)
+        body = ttk.Frame(self)
+        body.pack(fill=BOTH, expand=True)
+
+        sidebar = ttk.Frame(body)
+        sidebar.pack(side=LEFT, fill=Y, padx=(0, 6))
+        ttk.Label(sidebar, text="Д И А Л О Г И", style="Dim.TLabel").pack(anchor=W, padx=2)
+        self.sidebar = tk.Listbox(
+            sidebar,
+            background=FIELD,
+            foreground=FG,
+            font=FONT_SMALL,
+            relief="flat",
+            borderwidth=0,
+            highlightthickness=1,
+            highlightbackground=LINE,
+            highlightcolor=FG,
+            selectbackground=FG,
+            selectforeground="#060608",
+            exportselection=False,
+            width=20,
+            activestyle="none",
+        )
+        self.sidebar.pack(fill=Y, expand=True, pady=(4, 4))
+        self.sidebar.bind("<Double-Button-1>", lambda event: self._open_selected())
+        ttk.Button(sidebar, text="+ НОВЫЙ", command=self._new_dialog).pack(fill=X, pady=(0, 2))
+        ttk.Button(sidebar, text="ОТКРЫТЬ", style="Accent.TButton", command=self._open_selected).pack(fill=X)
+        ttk.Button(sidebar, text="УДАЛИТЬ", command=self._delete_selected).pack(fill=X, pady=(2, 0))
+
+        chat_area = ttk.Frame(body)
+        chat_area.pack(side=LEFT, fill=BOTH, expand=True)
+
+        console = ttk.Frame(chat_area)
         console.pack(fill=BOTH, expand=True, pady=4)
         self.log = tk.Text(
             console,
@@ -427,7 +464,7 @@ class ChatWindow(ttk.Frame):
         scroll.pack(side=LEFT, fill=Y)
         self.log.configure(yscrollcommand=scroll.set)
 
-        bottom = ttk.Frame(self)
+        bottom = ttk.Frame(chat_area)
         bottom.pack(fill=X, side=BOTTOM)
         self.entry = ttk.Entry(bottom, font=FONT_MAIN)
         self.entry.pack(side=LEFT, fill=X, expand=True, padx=(0, 6), ipady=2)
@@ -440,7 +477,82 @@ class ChatWindow(ttk.Frame):
         self._stream_open = False
         conversation.approval_hook = self._ask_approval
         conversation.activity_hook = self._report_activity
+        self._refresh_sidebar()
         self._welcome()
+
+    # ---- dialog sidebar ----------------------------------------------------
+    def _refresh_sidebar(self) -> None:
+        from .memory import list_conversations
+
+        names = list_conversations(self.conversation.root)
+        self.sidebar.delete(0, END)
+        for name in names:
+            self.sidebar.insert(END, name)
+            if name == self.conversation.name:
+                self.sidebar.selection_set(END)
+        if not names:
+            self.sidebar.insert(END, "(пусто)")
+
+    def _open_selected(self) -> None:
+        if self.busy:
+            return
+        selection = self.sidebar.curselection()
+        if not selection:
+            return
+        name = self.sidebar.get(selection[0]).strip()
+        if not name or name == "(пусто)" or name == self.conversation.name:
+            return
+        self._switch_conversation(name)
+
+    def _switch_conversation(self, name: str) -> None:
+        from .memory import Conversation
+
+        conv = Conversation(name, self.conversation.root).load()
+        self._apply_conversation(conv)
+
+    def _apply_conversation(self, conv) -> None:
+        self.conversation = conv
+        conv.approval_hook = self._ask_approval
+        conv.activity_hook = self._report_activity
+        self.banner.set_subtitle(f">> диалог: {conv.name}   //   память: {conv.root}")
+        self.log["state"] = NORMAL
+        self.log.delete("1.0", END)
+        self.log["state"] = DISABLED
+        self._stream_buf = ""
+        self._stream_open = False
+        self._refresh_sidebar()
+        self._welcome()
+
+    def _new_dialog(self) -> None:
+        if self.busy:
+            return
+        name = (simpledialog.askstring("НОВЫЙ ДИАЛОГ", "Имя диалога:", initialvalue="новый", parent=self) or "").strip()
+        if name:
+            self._switch_conversation(name)
+
+    def _delete_selected(self) -> None:
+        if self.busy:
+            return
+        selection = self.sidebar.curselection()
+        selected = self.sidebar.get(selection[0]).strip() if selection else ""
+        name = selected or self.conversation.name
+        if name == "(пусто)":
+            return
+        if selected and name != self.conversation.name:
+            question = f"Удалить диалог '{name}' вместе с историей и данными?"
+        else:
+            question = f"Удалить ТЕКУЩИЙ диалог '{name}' вместе с историей и данными?"
+        if not messagebox.askyesno("УДАЛЕНИЕ ДИАЛОГА", question):
+            return
+        from .memory import delete_conversation, list_conversations
+
+        if not delete_conversation(self.conversation.root, name):
+            return
+        if name == self.conversation.name:
+            remaining = list_conversations(self.conversation.root)
+            self._switch_conversation(remaining[0] if remaining else "mydata")
+        else:
+            self._refresh_sidebar()
 
     def _open_settings(self) -> None:
         self.pack_forget()
@@ -577,8 +689,8 @@ class App(Tk):
     def __init__(self) -> None:
         super().__init__()
         self.title("ActualONE")
-        self.geometry("780x620")
-        self.minsize(560, 440)
+        self.geometry("960x640")
+        self.minsize(760, 500)
         self.configure(background=BG)
         self.chat: ChatWindow | None = None
         self.report_callback_exception = self._report_exception
