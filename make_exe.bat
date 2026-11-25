@@ -22,8 +22,6 @@ if errorlevel 1 (
   exit /b 1
 )
 
-echo Installing optional JARVIS voice dependencies (best effort)...
-python -m pip install edge-tts pygame pyautogui psutil SpeechRecognition vosk pyaudio numpy >nul 2>nul
 
 echo Building Analyst.exe (takes a few minutes)...
 python -m PyInstaller --noconfirm --onefile --windowed --name Analyst gui_entry.py

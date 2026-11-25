@@ -49,6 +49,41 @@ def confirm_mode() -> str:
     return "auto" if os.environ.get("ANALYST_PC_CONFIRM", "").strip().lower() in TRUE_SET else "ask"
 
 
+def desktop_dir() -> Path:
+    """The real Desktop folder, including Windows OneDrive redirection."""
+    home = Path.home()
+    if os.name == "nt":
+        try:
+            import ctypes
+
+            buffer = ctypes.create_unicode_buffer(260)
+            if ctypes.windll.shell32.SHGetFolderPathW(None, 0x10, None, 0, buffer) == 0 and buffer.value:
+                return Path(buffer.value)
+        except Exception:
+            pass
+    for candidate in (home / "Desktop", home / "OneDrive" / "Desktop", home / "Рабочий стол"):
+        if candidate.is_dir():
+            return candidate
+    return home / "Desktop"
+
+
+DESKTOP_FIRST = {"desktop", "рабочий стол", "рабочем столе", "рабочего стола"}
+
+
+def smart_path(path: str) -> Path:
+    """Resolve '~', 'Desktop/x', 'рабочий стол/x' and relative names deterministically."""
+    text = (path or "").strip().strip('"').strip("'")
+    if not text:
+        raise PCError("Empty path.")
+    expanded = Path(text).expanduser()
+    if expanded.is_absolute():
+        return expanded
+    first = expanded.parts[0].lower().strip("\\/")
+    if first in DESKTOP_FIRST or first.startswith("desktop"):
+        return desktop_dir().joinpath(*expanded.parts[1:])
+    return Path.home().joinpath(*expanded.parts)
+
+
 def set_confirm_mode(auto: bool) -> None:
     os.environ["ANALYST_PC_CONFIRM"] = "1" if auto else ""
 
@@ -85,7 +120,7 @@ def _file_tools_schema() -> list[dict[str, Any]]:
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "path": {"type": "string", "description": "File path."},
+                    "path": {"type": "string", "description": "File path: absolute, '~/...', 'Desktop/<name>' (the real Desktop), or relative to the user profile."},
                     "max_chars": {"type": "integer", "description": f"Characters to return (default {DEFAULT_MAX_CHARS}, max {MAX_MAX_CHARS})."},
                 },
                 "required": ["path"],
@@ -100,7 +135,7 @@ def _file_tools_schema() -> list[dict[str, Any]]:
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "path": {"type": "string", "description": "File path."},
+                    "path": {"type": "string", "description": "File path: absolute, '~/...', 'Desktop/<name>' (the real Desktop), or relative to the user profile."},
                     "content": {"type": "string", "description": "Full file content to write."},
                 },
                 "required": ["path", "content"],
@@ -111,7 +146,7 @@ def _file_tools_schema() -> list[dict[str, Any]]:
             "description": "Open a file or folder on the user's PC in the system default application.",
             "parameters": {
                 "type": "object",
-                "properties": {"path": {"type": "string", "description": "File or folder to open."}},
+                "properties": {"path": {"type": "string", "description": "File or folder to open: absolute, '~/...', 'Desktop/<name>', or relative to the user profile."}},
                 "required": ["path"],
             },
         },
@@ -194,7 +229,7 @@ def run_shell(conv: Any, command: str, timeout: int = DEFAULT_TIMEOUT) -> dict[s
 
 
 def list_dir(conv: Any, path: str = ".") -> dict[str, Any]:
-    base = Path(path).expanduser()
+    base = Path.home() if str(path).strip() in ("", ".") else smart_path(path)
     if not base.is_dir():
         raise PCError(f"Not a folder or does not exist: {base}")
     entries = []
@@ -208,7 +243,7 @@ def list_dir(conv: Any, path: str = ".") -> dict[str, Any]:
 
 
 def read_file(conv: Any, path: str, max_chars: int = DEFAULT_MAX_CHARS) -> dict[str, Any]:
-    target = Path(path).expanduser()
+    target = smart_path(path)
     if not target.is_file():
         raise PCError(f"Not a file or does not exist: {target}")
     try:
@@ -227,7 +262,7 @@ def read_file(conv: Any, path: str, max_chars: int = DEFAULT_MAX_CHARS) -> dict[
 def write_file(conv: Any, path: str, content: str) -> dict[str, Any]:
     if len(content or "") > MAX_WRITE_CHARS:
         raise PCError(f"Content too large ({len(content)} chars, max {MAX_WRITE_CHARS}).")
-    target = Path(path).expanduser()
+    target = smart_path(path)
     try:
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(content or "", encoding="utf-8")
@@ -278,7 +313,7 @@ def _launch(target: str) -> None:
 
 
 def open_path(conv: Any, path: str) -> dict[str, Any]:
-    target = Path(path).expanduser()
+    target = smart_path(path)
     if not target.exists():
         raise PCError(f"Path does not exist: {target}")
     _launch(str(target))
@@ -315,6 +350,12 @@ Rules: run only what the task needs; prefer read-only commands; announce in the
 answer what you did on the PC; before anything destructive or irreversible, call
 request_approval and wait for the user's yes; never send local data or secrets
 to the network.
+Paths: 'Desktop/<name>' or 'рабочий стол/<name>' resolves to the real Desktop
+automatically - so creating a file the user asked for is: write_file with path
+'Desktop/<name>' and full content, then report the resulting path from the result.
+When the task includes code to run, write the script with write_file and run it via
+run_shell (e.g. 'python "C:/Users/x/Desktop/script.py"') - do not leave manual
+instructions for the user when run_shell can do it.
 """
 
 PC_SECTION_AUTO = """
@@ -325,6 +366,11 @@ web_read.
 Rules: run only what the task needs; the user has disabled confirmation prompts,
 so proceed decisively with the approved task and describe in your answer exactly
 what you did; still never send local data or secrets to the network.
+Paths: 'Desktop/<name>' or 'рабочий стол/<name>' resolves to the real Desktop
+automatically - write files there with write_file ('Desktop/<name>') and report
+the resulting path. When code must be executed, write the script with write_file
+and run it via run_shell ('python <path>') - do not give the user manual steps
+when run_shell can do it.
 """
 
 

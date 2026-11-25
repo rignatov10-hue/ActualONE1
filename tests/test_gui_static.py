@@ -31,7 +31,7 @@ def module_names(tree: ast.AST) -> set[str]:
         elif isinstance(node, ast.arg):
             defined.add(node.arg)
         elif isinstance(node, ast.comprehension) and isinstance(node.target, ast.Name):
-            defined.add(node.id)
+            defined.add(node.target.id)
     return defined
 
 

@@ -169,3 +169,30 @@ def test_auto_section_used(monkeypatch: pytest.MonkeyPatch):
     auto, schemas = agent_mod._system_state()
     assert "disabled confirmation prompts" in auto
     assert "run_shell" in {schema["name"] for schema in schemas}
+
+
+def test_relative_path_anchors_to_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    home = tmp_path / "home-rel"
+    home.mkdir()
+    monkeypatch.setattr("pathlib.Path.home", lambda: home)
+    assert pc.smart_path("notes/x.txt") == home / "notes" / "x.txt"
+
+
+def test_desktop_path_resolution(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, conv: memory.Conversation):
+    home = tmp_path / "home"
+    desktop = home / "Desktop"
+    desktop.mkdir(parents=True)
+    monkeypatch.setattr("pathlib.Path.home", lambda: home)
+    assert pc.desktop_dir() == desktop
+    assert pc.smart_path("Desktop/x.txt") == desktop / "x.txt"
+    monkeypatch.setenv("ANALYST_PC_TOOLS", "1")
+    payload = json.loads(
+        agent_mod.execute_tool(
+            conv,
+            {"name": "write_file", "arguments": {"path": "рабочий стол/тест.txt", "content": "Привет"}},
+        )
+    )
+    assert "error" not in payload
+    written = desktop / "тест.txt"
+    assert written.exists() and written.read_text(encoding="utf-8") == "Привет"
+    assert payload["path"] == str(written.resolve())
