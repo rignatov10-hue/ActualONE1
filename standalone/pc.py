@@ -26,6 +26,9 @@ MAX_MAX_CHARS = 50000
 DEFAULT_TIMEOUT = 30
 MAX_TIMEOUT = 120
 MAX_WRITE_CHARS = 200000
+MAX_REPLACE_CHARS = 500000
+MAX_SEARCH_RESULTS = 200
+SKIP_DIRS = {".git", "__pycache__", "node_modules", ".venv", "venv", "AppData", "$RECYCLE.BIN", "Windows"}
 MAX_ENTRIES = 500
 AUDIT_NAME = "pc_log.jsonl"
 
@@ -139,6 +142,42 @@ def _file_tools_schema() -> list[dict[str, Any]]:
                     "content": {"type": "string", "description": "Full file content to write."},
                 },
                 "required": ["path", "content"],
+            },
+        },
+        {
+            "name": "replace_in_file",
+            "description": (
+                "Edit an existing text file on the user's PC by replacing an exact"
+                " fragment - safer than rewriting the whole file. Copy old_text"
+                " verbatim from read_file output."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "File path: absolute, '~/...', 'Desktop/<name>' (the real Desktop), or relative to the user profile."},
+                    "old_text": {"type": "string", "description": "Exact existing fragment to replace (copied verbatim from read_file)."},
+                    "new_text": {"type": "string", "description": "Replacement fragment (may be empty to delete)."},
+                    "all_occurrences": {"type": "boolean", "description": "Replace every occurrence; default replaces exactly one."},
+                },
+                "required": ["path", "old_text", "new_text"],
+            },
+        },
+        {
+            "name": "search_files",
+            "description": (
+                "Recursively search text files in a folder (default: the user profile)"
+                " for a case-insensitive substring. Find where something lives before"
+                " editing it."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Case-insensitive text to search for."},
+                    "path": {"type": "string", "description": "Folder to search; the user profile when omitted."},
+                    "extension": {"type": "string", "description": "Only files with this extension, e.g. 'py' or 'txt' (optional)."},
+                    "max_results": {"type": "integer", "description": "Maximum matches to return (default 50, max 200)."},
+                },
+                "required": ["query"],
             },
         },
         {
@@ -273,6 +312,87 @@ def write_file(conv: Any, path: str, content: str) -> dict[str, Any]:
     return result
 
 
+def replace_in_file(
+    conv: Any, path: str, old_text: str, new_text: str, all_occurrences: bool = False
+) -> dict[str, Any]:
+    target = smart_path(path)
+    if not target.is_file():
+        raise PCError(f"Not a file or does not exist: {target}")
+    if not old_text:
+        raise PCError("old_text is empty.")
+    try:
+        text = target.read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        raise PCError(f"Could not read file: {exc}") from None
+    if len(text) > MAX_REPLACE_CHARS:
+        raise PCError(f"File too large ({len(text)} chars, max {MAX_REPLACE_CHARS}); use write_file or run_shell instead.")
+    count = text.count(old_text)
+    if count == 0:
+        raise PCError("old_text not found in the file - read_file first and copy the exact fragment.")
+    if count > 1 and not all_occurrences:
+        raise PCError(
+            f"old_text occurs {count} times; include more surrounding context or pass all_occurrences=true."
+        )
+    updated = text.replace(old_text, new_text) if all_occurrences else text.replace(old_text, new_text, 1)
+    try:
+        target.write_text(updated, encoding="utf-8")
+    except OSError as exc:
+        raise PCError(f"Could not write file: {exc}") from None
+    done = count if all_occurrences else 1
+    result = {"path": str(target.resolve()), "replacements": done}
+    _audit(
+        conv,
+        {"time": time.strftime("%Y-%m-%dT%H:%M:%S"), "tool": "replace_in_file", "path": str(target), "replacements": done},
+    )
+    return result
+
+
+def search_files(
+    conv: Any, query: str, path: str = "", extension: str = "", max_results: int = 50
+) -> dict[str, Any]:
+    needle = (query or "").strip().lower()
+    if not needle:
+        raise PCError("Empty query.")
+    base = Path.home() if str(path).strip() in ("", ".") else smart_path(path)
+    if not base.is_dir():
+        raise PCError(f"Not a folder or does not exist: {base}")
+    try:
+        limit = max(1, min(int(max_results), MAX_SEARCH_RESULTS))
+    except (TypeError, ValueError):
+        limit = 50
+    ext = (extension or "").strip().lstrip(".").lower()
+    matches: list[dict[str, Any]] = []
+    scanned = 0
+    for root, dirs, files in os.walk(base):
+        dirs[:] = [d for d in dirs if d not in SKIP_DIRS and not d.startswith(".")]
+        for name in files:
+            if len(matches) >= limit:
+                break
+            if ext and not name.lower().endswith("." + ext):
+                continue
+            candidate = Path(root) / name
+            try:
+                if candidate.stat().st_size > 5_000_000:
+                    continue
+                with open(candidate, "r", encoding="utf-8", errors="ignore") as handle:
+                    for line_no, line in enumerate(handle, 1):
+                        if needle in line.lower():
+                            matches.append({"file": str(candidate), "line": line_no, "text": line.strip()[:200]})
+                            if len(matches) >= limit:
+                                break
+                scanned += 1
+            except OSError:
+                continue
+        if len(matches) >= limit:
+            break
+    result = {"query": query, "base": str(base), "files_scanned": scanned, "matches": len(matches), "results": matches}
+    _audit(
+        conv,
+        {"time": time.strftime("%Y-%m-%dT%H:%M:%S"), "tool": "search_files", "query": query, "base": str(base)},
+    )
+    return result
+
+
 def web_read(conv: Any, url: str, max_chars: int = DEFAULT_MAX_CHARS) -> dict[str, Any]:
     import re as _re
     from urllib.request import Request as _Request, urlopen as _urlopen
@@ -336,6 +456,8 @@ PC_IMPLS: dict[str, Callable[..., dict[str, Any]]] = {
     "list_dir": list_dir,
     "read_file": read_file,
     "write_file": write_file,
+    "replace_in_file": replace_in_file,
+    "search_files": search_files,
     "open_path": open_path,
     "open_url": open_url,
     "web_read": web_read,
@@ -344,8 +466,12 @@ PC_IMPLS: dict[str, Callable[..., dict[str, Any]]] = {
 PC_SECTION = """
 
 Local PC tools (the user enables them explicitly, every action is audit-logged in
-pc_log.jsonl): run_shell, list_dir, read_file, write_file, open_path, open_url,
-web_read.
+pc_log.jsonl): run_shell, list_dir, read_file, write_file, replace_in_file,
+search_files, open_path, open_url, web_read.
+Work like an autonomous coding agent: locate (search_files, list_dir) -> read
+(read_file) -> modify (replace_in_file for targeted edits, write_file for new
+or fully rewritten files) -> run/verify (run_shell) -> report the result. Never
+end with 'do it yourself' instructions when a tool can do it.
 Rules: run only what the task needs; prefer read-only commands; announce in the
 answer what you did on the PC; before anything destructive or irreversible, call
 request_approval and wait for the user's yes; never send local data or secrets
@@ -361,8 +487,12 @@ instructions for the user when run_shell can do it.
 PC_SECTION_AUTO = """
 
 Local PC tools (the user enables them explicitly, every action is audit-logged in
-pc_log.jsonl): run_shell, list_dir, read_file, write_file, open_path, open_url,
-web_read.
+pc_log.jsonl): run_shell, list_dir, read_file, write_file, replace_in_file,
+search_files, open_path, open_url, web_read.
+Work like an autonomous coding agent: locate (search_files, list_dir) -> read
+(read_file) -> modify (replace_in_file for targeted edits, write_file for new
+or fully rewritten files) -> run/verify (run_shell) -> report the result. Never
+end with manual 'do it yourself' steps when a tool can do it.
 Rules: run only what the task needs; the user has disabled confirmation prompts,
 so proceed decisively with the approved task and describe in your answer exactly
 what you did; still never send local data or secrets to the network.

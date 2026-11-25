@@ -13,6 +13,7 @@ Advanced runtime:
 from __future__ import annotations
 
 import json
+import os
 import time
 from typing import Any, Callable
 
@@ -75,6 +76,13 @@ action into several smaller ones to dodge this rule.
 MEMORY: use save_fact when the user shares a durable preference or project fact (name, team,
 naming conventions, default settings); it survives across conversations. Do not save transient
 data facts that belong to the loaded dataset.
+
+WORK STYLE - act, do not instruct: any real task (create or fix files, scripts, data work,
+computer work) do end to end yourself with the available tools in a loop: outline a short plan,
+execute it step by step (search, read, edit, run, verify), fix what fails and retry before
+finishing. Keep working through tool calls until the task is fully done - the user sees each
+step live. Finish with one compact report: what was done, where, what to check. Never leave
+'manual steps for the user' when a tool can do them.
 """
 
 APPROVAL_TOOL_SCHEMA: dict[str, Any] = {
@@ -120,6 +128,7 @@ SUMMARY_INSTRUCTION = (
 
 SUMMARY_AFTER = 40
 SUMMARY_KEEP = 12
+DEFAULT_MAX_STEPS = max(1, int(os.environ.get("ANALYST_MAX_STEPS", "32")))
 
 
 def _trace(conv: Conversation, event: dict[str, Any]) -> None:
@@ -142,7 +151,22 @@ def _notify(conv: Conversation, text: str) -> None:
             pass
 
 
-def _execute(conv: Conversation, call: dict[str, Any]) -> str:
+def _step_label(call: dict[str, Any]) -> str:
+    args = call.get("arguments") or {}
+    detail = (
+        args.get("command")
+        or args.get("path")
+        or args.get("url")
+        or args.get("name")
+        or args.get("query")
+        or ""
+    )
+    detail = str(detail).replace("\n", " ").strip()[:80]
+    return f"{call.get('name', 'tool')} {detail}".strip()
+
+
+def _execute(conv: Conversation, call: dict[str, Any], step: int = 0) -> str:
+    _notify(conv, f">> шаг {step}: {_step_label(call)}")
     started = time.time()
     content = _execute_impl(conv, call)
     _trace(
@@ -291,8 +315,9 @@ def _maybe_summarize(conv: Conversation, client: Any) -> None:
     _trace(conv, {"event": "summarize", "compressed": len(tail)})
 
 
-def run_turn(conv: Conversation, client: Any, user_text: str, max_steps: int = 15) -> str:
+def run_turn(conv: Conversation, client: Any, user_text: str, max_steps: int | None = None) -> str:
     """One user turn: run the tool loop until the model produces a final answer."""
+    steps = DEFAULT_MAX_STEPS if max_steps is None else max(1, int(max_steps))
     conv.append({"role": "user", "content": user_text, "time": utc_now()})
     instructions, schemas = _system_state()
     _maybe_summarize(conv, client)
@@ -303,7 +328,7 @@ def run_turn(conv: Conversation, client: Any, user_text: str, max_steps: int = 1
     if facts:
         instructions += facts_section(facts)
     messages = conv.model_messages()
-    for _ in range(max_steps):
+    for step in range(1, steps + 1):
         response = client.complete(instructions, messages, schemas)
         assistant: dict[str, Any] = {"role": "assistant", "content": response.get("content")}
         if response.get("tool_calls"):
@@ -313,7 +338,7 @@ def run_turn(conv: Conversation, client: Any, user_text: str, max_steps: int = 1
         if not response.get("tool_calls"):
             return response.get("content") or ""
         for call in response["tool_calls"]:
-            content = _execute(conv, call)
+            content = _execute(conv, call, step)
             tool_event = {
                 "role": "tool",
                 "tool_call_id": call.get("id") or call.get("name", "tool"),
@@ -325,7 +350,8 @@ def run_turn(conv: Conversation, client: Any, user_text: str, max_steps: int = 1
     fallback = {
         "role": "assistant",
         "content": (
-            "I stopped before finishing: too many steps. Ask a narrower question or say 'continue'."
+            "Остановился до завершения задачи: исчерпан лимит шагов на один запрос."
+            " Напишите «продолжай» - продолжу с того же места."
         ),
     }
     conv.append(fallback)

@@ -196,3 +196,65 @@ def test_desktop_path_resolution(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     written = desktop / "тест.txt"
     assert written.exists() and written.read_text(encoding="utf-8") == "Привет"
     assert payload["path"] == str(written.resolve())
+
+
+def test_replace_in_file_targeted_edit(tmp_path, monkeypatch, conv):
+    monkeypatch.setenv("ANALYST_PC_TOOLS", "1")
+    file = tmp_path / "code.py"
+    file.write_text("def run():\n    return 1\n", encoding="utf-8")
+    payload = json.loads(
+        agent_mod.execute_tool(
+            conv,
+            {"name": "replace_in_file", "arguments": {"path": str(file), "old_text": "return 1", "new_text": "return 42"}},
+        )
+    )
+    assert "error" not in payload and payload["replacements"] == 1
+    assert "return 42" in file.read_text(encoding="utf-8")
+
+
+def test_replace_in_file_ambiguity_guard(tmp_path, monkeypatch, conv):
+    monkeypatch.setenv("ANALYST_PC_TOOLS", "1")
+    file = tmp_path / "dup.txt"
+    file.write_text("x\nx\n", encoding="utf-8")
+    payload = json.loads(
+        agent_mod.execute_tool(
+            conv,
+            {"name": "replace_in_file", "arguments": {"path": str(file), "old_text": "x", "new_text": "y"}},
+        )
+    )
+    assert "error" in payload
+    payload = json.loads(
+        agent_mod.execute_tool(
+            conv,
+            {"name": "replace_in_file", "arguments": {"path": str(file), "old_text": "x", "new_text": "y", "all_occurrences": True}},
+        )
+    )
+    assert "error" not in payload and payload["replacements"] == 2
+    assert file.read_text(encoding="utf-8") == "y\ny\n"
+
+
+def test_search_files_finds_substring(tmp_path, monkeypatch, conv):
+    monkeypatch.setenv("ANALYST_PC_TOOLS", "1")
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "a.py").write_text("TOKEN = 'secret'\nprint('ok')\n", encoding="utf-8")
+    (tmp_path / "src" / "b.txt").write_text("nothing here\n", encoding="utf-8")
+    payload = json.loads(
+        agent_mod.execute_tool(
+            conv,
+            {"name": "search_files", "arguments": {"query": "sEcReT", "path": str(tmp_path / "src"), "extension": "py"}},
+        )
+    )
+    assert "error" not in payload and payload["matches"] == 1
+    assert payload["results"][0]["file"].endswith("a.py")
+    assert payload["results"][0]["line"] == 1
+
+
+def test_step_limit_env_override(monkeypatch):
+    monkeypatch.setenv("ANALYST_MAX_STEPS", "7")
+    import importlib
+
+    reloaded = importlib.reload(agent_mod)
+    assert reloaded.DEFAULT_MAX_STEPS == 7
+    monkeypatch.delenv("ANALYST_MAX_STEPS", raising=False)
+    importlib.reload(agent_mod)
+    assert agent_mod.DEFAULT_MAX_STEPS == 32
