@@ -22,6 +22,13 @@ if errorlevel 1 (
   exit /b 1
 )
 
+echo Installing optional interactive browser support (Playwright)...
+python -m pip install playwright >nul 2>nul
+python -m playwright install chromium >nul 2>nul
+if errorlevel 1 echo WARNING: Playwright not installed - browser tools will ask the agent to show install steps.
+python -c "from playwright.sync_api import sync_playwright" >nul 2>nul
+if errorlevel 1 echo WARNING: Playwright missing - browser tools disabled until installed.
+
 
 echo Building Analyst.exe (takes a few minutes)...
 python -m PyInstaller --noconfirm --onefile --windowed --name Analyst gui_entry.py

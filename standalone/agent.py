@@ -17,7 +17,9 @@ import os
 import time
 from typing import Any, Callable
 
+from . import browser as browser_mod
 from . import pc as pc_mod
+from . import vm as vm_mod
 from .llm import AnthropicClient, OpenAICompatClient
 from .memory import Conversation, facts_section, load_facts, save_fact
 from .pc import PCError
@@ -63,9 +65,9 @@ the full guidance on empathy and your character - load them in emotional or pers
 driven conversations.
 
 Your capabilities are fixed tools only: the five data tools, load_skill for reading user skills,
-and - only when listed in these instructions - the user-enabled local PC tools. You cannot write
-and run arbitrary code, use shells beyond the listed PC tools, or fetch the web beyond open_url.
-Stay within the tools and never promise otherwise.
+and - only when listed in these instructions - the user-enabled local PC, browser and VM tools.
+You cannot write and run arbitrary code beyond what the listed tools allow; stay within the
+tools and never promise otherwise.
 
 SAFETY - human in the loop: right before any destructive, irreversible, or externally visible
 action (delete, overwrite, send, publish, install, change settings) call request_approval with a
@@ -209,6 +211,32 @@ def _execute_impl(conv: Conversation, call: dict[str, Any]) -> str:
             return json.dumps({"error": str(exc)}, ensure_ascii=False)
         except TypeError as exc:
             return json.dumps({"error": f"Bad arguments for '{name}': {exc}."}, ensure_ascii=False)
+    if name in browser_mod.BROWSER_IMPLS:
+        if not pc_mod.enabled():
+            return json.dumps(
+                {"error": "PC tools are disabled. The user must enable 'Управление ПК' in the settings first."},
+                ensure_ascii=False,
+            )
+        try:
+            result = browser_mod.BROWSER_IMPLS[name](conv, **arguments)
+            return json.dumps(result, ensure_ascii=False, default=str)
+        except PCError as exc:
+            return json.dumps({"error": str(exc)}, ensure_ascii=False)
+        except TypeError as exc:
+            return json.dumps({"error": f"Bad arguments for '{name}': {exc}."}, ensure_ascii=False)
+    if name in vm_mod.VM_IMPLS:
+        if not pc_mod.enabled():
+            return json.dumps(
+                {"error": "PC tools are disabled. The user must enable 'Управление ПК' in the settings first."},
+                ensure_ascii=False,
+            )
+        try:
+            result = vm_mod.VM_IMPLS[name](conv, **arguments)
+            return json.dumps(result, ensure_ascii=False, default=str)
+        except PCError as exc:
+            return json.dumps({"error": str(exc)}, ensure_ascii=False)
+        except TypeError as exc:
+            return json.dumps({"error": f"Bad arguments for '{name}': {exc}."}, ensure_ascii=False)
     implementation = TOOL_IMPLS.get(name)
     if implementation is None:
         return json.dumps({"error": f"Unknown tool '{name}'."}, ensure_ascii=False)
@@ -281,6 +309,10 @@ def _system_state() -> tuple[str, list[dict[str, Any]]]:
     if pc_mod.enabled():
         instructions += pc_mod.PC_SECTION_AUTO if pc_mod.confirm_mode() == "auto" else pc_mod.PC_SECTION
         schemas.extend(pc_mod.PC_TOOL_SCHEMAS)
+        schemas.extend(browser_mod.BROWSER_TOOL_SCHEMAS)
+        instructions += browser_mod.BROWSER_SECTION
+        schemas.extend(vm_mod.VM_TOOL_SCHEMAS)
+        instructions += vm_mod.VM_SECTION
     schemas.append(APPROVAL_TOOL_SCHEMA)
     schemas.append(SAVE_FACT_TOOL_SCHEMA)
     return instructions, schemas
