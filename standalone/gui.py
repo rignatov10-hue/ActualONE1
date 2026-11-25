@@ -459,8 +459,10 @@ class ChatWindow(ttk.Frame):
         self.sidebar.pack(fill=Y, expand=True, pady=(4, 4))
         self.sidebar.bind("<Double-Button-1>", lambda event: self._open_selected())
         ttk.Button(sidebar, text="+ НОВЫЙ", command=self._new_dialog).pack(fill=X, pady=(0, 2))
+        ttk.Button(sidebar, text="ПОИСК", command=self._search_dialogs).pack(fill=X)
         ttk.Button(sidebar, text="ОТКРЫТЬ", style="Accent.TButton", command=self._open_selected).pack(fill=X)
         ttk.Button(sidebar, text="УДАЛИТЬ", command=self._delete_selected).pack(fill=X, pady=(2, 0))
+        ttk.Button(sidebar, text="ОБНОВИТЬ", command=self._refresh_sidebar).pack(fill=X, pady=(2, 0))
 
         chat_area = ttk.Frame(body)
         chat_area.pack(side=LEFT, fill=BOTH, expand=True)
@@ -510,12 +512,16 @@ class ChatWindow(ttk.Frame):
 
     # ---- dialog sidebar ----------------------------------------------------
     def _refresh_sidebar(self) -> None:
-        from .memory import list_conversations
+        from .memory import conversation_stats, list_conversations
 
         names = list_conversations(self.conversation.root)
+        stats = conversation_stats(self.conversation.root)
         self.sidebar.delete(0, END)
+        self._sidebar_names: list[str] = []
         for name in names:
-            self.sidebar.insert(END, name)
+            count = stats.get(name, 0)
+            self.sidebar.insert(END, f"{name}  ·  {count}")
+            self._sidebar_names.append(name)
             if name == self.conversation.name:
                 self.sidebar.selection_set(END)
         if not names:
@@ -525,10 +531,10 @@ class ChatWindow(ttk.Frame):
         if self.busy:
             return
         selection = self.sidebar.curselection()
-        if not selection:
+        if not selection or selection[0] >= len(self._sidebar_names):
             return
-        name = self.sidebar.get(selection[0]).strip()
-        if not name or name == "(пусто)" or name == self.conversation.name:
+        name = self._sidebar_names[selection[0]]
+        if not name or name == self.conversation.name:
             return
         self._switch_conversation(name)
 
@@ -548,8 +554,20 @@ class ChatWindow(ttk.Frame):
         self.log["state"] = DISABLED
         self._stream_buf = ""
         self._stream_open = False
+        self._remember_last_dialog(conv.name)
         self._refresh_sidebar()
         self._welcome()
+
+    def _remember_last_dialog(self, name: str) -> None:
+        config = load_config()
+        if config.get("conversation") == name:
+            return
+        config["conversation"] = name
+        save_config(config)
+        try:
+            self.master.settings.vars["conversation"].set(name)
+        except (AttributeError, KeyError, tk.TclError):
+            pass
 
     def _new_dialog(self) -> None:
         if self.busy:
@@ -582,6 +600,29 @@ class ChatWindow(ttk.Frame):
         else:
             self._refresh_sidebar()
 
+    def _search_dialogs(self) -> None:
+        from .memory import search_conversations
+
+        query = (
+            simpledialog.askstring(
+                "ПОИСК ПО ДИАЛОГАМ", "Что искать во всех сохранённых диалогах:", parent=self
+            )
+            or ""
+        ).strip()
+        if not query:
+            return
+        results = search_conversations(self.conversation.root, query)
+        if not results:
+            messagebox.showinfo("ПОИСК ПО ДИАЛОГАМ", f"«{query}» нигде не найдено.")
+            return
+        lines = [f"Совпадений: {len(results)}"] 
+        for hit in results[:20]:
+            who = "Вы" if hit["role"] == "user" else "Агент"
+            lines.append(f"\n[{hit['dialog']}] {who}:\n{hit['excerpt']}")
+        if len(results) > 20:
+            lines.append("\n…и ещё " + str(len(results) - 20))
+        messagebox.showinfo("ПОИСК ПО ДИАЛОГАМ", "\n".join(lines))
+
     def _open_settings(self) -> None:
         self.pack_forget()
         app = self.master
@@ -591,15 +632,33 @@ class ChatWindow(ttk.Frame):
 
     # ---- UI helpers --------------------------------------------------------
     def _welcome(self) -> None:
-        if self.conversation.dataset is not None:
-            note = f"Ранее загружен файл: {self.conversation.dataset.title} ({len(self.conversation.full)} строк)."
+        replayed = self._replay_history()
+        if replayed:
+            note = f"История диалога «{self.conversation.name}»: {replayed} сообщ. — можно продолжать."
+            if self.conversation.dataset is not None:
+                note += f" Загружен файл: {self.conversation.dataset.title} ({len(self.conversation.full)} строк)."
+            self._append_line("система", note, "#666")
         else:
-            note = (
-                "Готов работать. Просто задавайте вопросы; если нужна работа с данными — "
-                "пришлите ссылку на CSV/Excel (Google Drive) или путь к файлу на диске."
-            )
-        self._append_line("Агент", note)
+            if self.conversation.dataset is not None:
+                note = f"Ранее загружен файл: {self.conversation.dataset.title} ({len(self.conversation.full)} строк)."
+            else:
+                note = (
+                    "Готов работать. Просто задавайте вопросы; если нужна работа с данными — "
+                    "пришлите ссылку на CSV/Excel (Google Drive) или путь к файлу на диске."
+                )
+            self._append_line("Агент", note)
         self.entry.focus_set()
+
+    def _replay_history(self) -> int:
+        shown = 0
+        for event in self.conversation.messages:
+            role = str(event.get("role") or "")
+            content = str(event.get("content") or "").strip()
+            if role not in {"user", "assistant"} or not content:
+                continue
+            self._append_line("Вы" if role == "user" else "Агент", content)
+            shown += 1
+        return shown
 
     def _append_line(self, who: str, text: str, color: str = "#000") -> None:
         tag = {"#000": "agent", "#666": "sys", "#a00": "err"}.get(color, "agent")

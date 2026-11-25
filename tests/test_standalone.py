@@ -411,6 +411,32 @@ def test_gui_config_roundtrip(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     assert (tmp_path / "gui_config.json").exists()
 
 
+def test_conversation_stats_and_search(tmp_path: Path):
+    conv = memory.Conversation("stats-a", tmp_path).load()
+    conv.append({"role": "user", "content": "привет, покажи продажи", "time": memory.utc_now()})
+    conv.append({"role": "tool", "content": "group-by output", "time": memory.utc_now()})
+    conv.append({"role": "assistant", "content": "Продажи выросли на 12%", "time": memory.utc_now()})
+    other = memory.Conversation("stats-b", tmp_path).load()
+    other.append({"role": "assistant", "content": "тут ничего похожего", "time": memory.utc_now()})
+
+    stats = memory.conversation_stats(tmp_path)
+    assert stats == {"stats-a": 2, "stats-b": 1}
+    empty = memory.conversation_stats(tmp_path / "nowhere")
+    assert empty == {}
+
+    hits = memory.search_conversations(tmp_path, "ноутбук")
+    assert hits == []
+    hits = memory.search_conversations(tmp_path, "продажи")
+    assert len(hits) == 2
+    assert {hit["dialog"] for hit in hits} == {"stats-a"}
+    assert {hit["role"] for hit in hits} == {"user", "assistant"}
+    assert all(hit["excerpt"] for hit in hits)
+
+    summary = memory.Conversation("stats-summary", tmp_path).load()
+    summary.append({"role": "summary", "content": "продажи сжали историю", "time": memory.utc_now()})
+    assert memory.search_conversations(tmp_path, "сжали") == []
+
+
 def test_list_and_delete_conversations(tmp_path: Path):
     conv = memory.Conversation("dialog-a", tmp_path).load()
     conv.append({"role": "user", "content": "привет", "time": memory.utc_now()})

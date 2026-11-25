@@ -187,6 +187,75 @@ def list_conversations(root: Path | str | None = None) -> list[str]:
     return sorted(path.stem for path in directory.glob("*.jsonl"))
 
 
+def conversation_stats(root: Path | str | None = None) -> dict[str, int]:
+    """Saved dialog name -> number of user/assistant messages kept on disk."""
+    directory = Path(root or MEMORY_ROOT).resolve() / "conversations"
+    stats: dict[str, int] = {}
+    if not directory.is_dir():
+        return stats
+    for path in sorted(directory.glob("*.jsonl")):
+        count = 0
+        try:
+            with path.open("r", encoding="utf-8", errors="ignore") as handle:
+                for line in handle:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        event = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    role = str(event.get("role") or "")
+                    if role in {"user", "assistant"} and str(event.get("content") or "").strip():
+                        count += 1
+        except OSError:
+            continue
+        stats[path.stem] = count
+    return stats
+
+
+def search_conversations(
+    root: Path | str | None, query: str, max_results: int = 30
+) -> list[dict[str, str]]:
+    """Search all saved dialogs for a phrase; hits as {dialog, role, excerpt}."""
+    needle = (query or "").strip().lower()
+    if not needle:
+        return []
+    directory = Path(root or MEMORY_ROOT).resolve() / "conversations"
+    results: list[dict[str, str]] = []
+    if not directory.is_dir():
+        return results
+    for path in sorted(directory.glob("*.jsonl")):
+        try:
+            lines = path.read_text(encoding="utf-8", errors="ignore").splitlines()
+        except OSError:
+            continue
+        for line in lines:
+            if len(results) >= max_results:
+                return results
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if str(event.get("role") or "") not in {"user", "assistant"}:
+                continue
+            content = " ".join(str(event.get("content") or "").split())
+            position = content.lower().find(needle)
+            if position < 0:
+                continue
+            start = max(0, position - 60)
+            excerpt = content[start : position + 120].strip()
+            if start > 0:
+                excerpt = "..." + excerpt
+            if position + 120 < len(content):
+                excerpt += "..."
+            results.append({"dialog": path.stem, "role": str(event.get("role")), "excerpt": excerpt})
+    return results
+
+
 def delete_conversation(root: Path | str | None, name: str) -> bool:
     """Remove a conversation's history and dataset files; True when anything was deleted."""
     root = Path(root or MEMORY_ROOT).resolve()
