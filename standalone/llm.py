@@ -9,6 +9,7 @@ Messages-API client. Both speak one normalized message format.
 from __future__ import annotations
 
 import json
+import os
 import time
 import urllib.error
 import urllib.request
@@ -16,6 +17,15 @@ from typing import Any
 
 _TIMEOUT = 300
 _RETRIES = 3
+
+
+def _max_tokens() -> int:
+    """Output token budget per completion (ANALYST_MAX_TOKENS). Big enough for long texts."""
+    raw = os.environ.get("ANALYST_MAX_TOKENS", "8192").strip()
+    try:
+        return max(256, int(raw))
+    except ValueError:
+        return 8192
 
 
 class StreamCancelled(Exception):
@@ -142,6 +152,7 @@ class OpenAICompatClient:
         payload: dict[str, Any] = {
             "model": self.model,
             "messages": payload_messages,
+            "max_tokens": _max_tokens(),
         }
         if tool_schemas:
             payload["tools"] = [
@@ -164,6 +175,7 @@ class OpenAICompatClient:
             response = self._stream(payload, on_delta)
         try:
             message = response["choices"][0]["message"]
+            finish_reason = response["choices"][0].get("finish_reason")
         except (KeyError, IndexError, TypeError) as exc:
             raise LLMError(f"Unexpected completion response: {json.dumps(response)[:300]}") from exc
         tool_calls = []
@@ -181,18 +193,25 @@ class OpenAICompatClient:
                     "arguments": arguments,
                 }
             )
-        return {"content": message.get("content"), "tool_calls": tool_calls}
+        return {
+            "content": message.get("content"),
+            "tool_calls": tool_calls,
+            "stop_reason": "length" if finish_reason == "length" else "end_turn",
+        }
 
     def _stream(self, payload: dict[str, Any], on_delta: Any) -> dict[str, Any]:
         stream_payload = dict(payload)
         stream_payload["stream"] = True
         content_parts: list[str] = []
         calls: dict[int, dict[str, Any]] = {}
+        finish_reason: str | None = None
         try:
             with _stream_request(f"{self.base_url}/chat/completions", self._headers(), stream_payload, _TIMEOUT) as response:
                 for event in _sse_lines(response):
                     choices = event.get("choices") or [{}]
                     delta = choices[0].get("delta") or {}
+                    if choices[0].get("finish_reason"):
+                        finish_reason = choices[0]["finish_reason"]
                     piece = delta.get("content")
                     if piece:
                         content_parts.append(piece)
@@ -224,7 +243,7 @@ class OpenAICompatClient:
         return {"choices": [{"message": {"content": "".join(content_parts) or None, "tool_calls": [
             {"id": c["id"], "function": {"name": c["name"], "arguments": json.dumps(c["arguments"], ensure_ascii=False)}}
             for c in tool_calls
-        ]}}]}
+        ]}, "finish_reason": finish_reason}]}
 
     def _headers(self) -> dict[str, str]:
         return {"Authorization": f"Bearer {self.api_key}"}
@@ -278,7 +297,7 @@ class AnthropicClient:
     def _payload(self, system: str, messages: list[dict[str, Any]], tool_schemas: list[dict[str, Any]]) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "model": self.model,
-            "max_tokens": 4096,
+            "max_tokens": _max_tokens(),
             "system": system,
             "messages": self._build_messages(messages),
         }
@@ -318,13 +337,18 @@ class AnthropicClient:
                 )
         if response.get("stop_reason") == "max_tokens" and not tool_calls and not text:
             raise LLMError("The model hit its output limit before answering.")
-        return {"content": text, "tool_calls": tool_calls}
+        return {
+            "content": text,
+            "tool_calls": tool_calls,
+            "stop_reason": "length" if response.get("stop_reason") == "max_tokens" else "end_turn",
+        }
 
     def _stream(self, payload: dict[str, Any], headers: dict[str, str], on_delta: Any) -> dict[str, Any]:
         stream_payload = dict(payload)
         stream_payload["stream"] = True
         text_parts: list[str] = []
         calls: dict[int, dict[str, Any]] = {}
+        stop_reason = "end_turn"
 
         def slot_for(index: int) -> dict[str, Any]:
             return calls.setdefault(index, {"id": "", "name": "", "arguments": ""})
@@ -347,6 +371,10 @@ class AnthropicClient:
                             on_delta(delta["text"])
                         elif delta.get("type") == "input_json_delta":
                             slot_for(index)["arguments"] += delta.get("partial_json") or ""
+                    elif kind == "message_delta":
+                        reason = (event.get("delta") or {}).get("stop_reason")
+                        if reason:
+                            stop_reason = reason
         except (StreamCancelled, LLMError):
             raise
         except Exception as exc:
@@ -364,7 +392,7 @@ class AnthropicClient:
             content.append(
                 {"type": "tool_use", "id": slot["id"] or f"call_{index}", "name": slot["name"], "input": arguments}
             )
-        return {"content": content, "stop_reason": "end_turn"}
+        return {"content": content, "stop_reason": "length" if stop_reason == "max_tokens" else "end_turn"}
 
 # Provider presets: name -> (base_url, env var of the key)
 OPENAI_COMPATIBLE_PRESETS: dict[str, tuple[str, str]] = {

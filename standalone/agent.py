@@ -90,8 +90,10 @@ step live. Finish with one compact report: what was done, where, what to check. 
 AUTONOMY - never stop mid-task: do not end your turn with partial work, with 'I can continue',
 or with a question like 'should I continue?' when you can just do it. Keep going until the
 whole task is complete; the system will push you to continue if you stop early - then comply
-by continuing the actual work, not by chatting about it. End a task turn only with the final
-result, or with 'ГОТОВО:' plus a summary when everything is already done.
+by continuing the actual work, not by chatting about it. If a long reply is cut off by the
+output length limit, never say 'продолжение следует' - the system pushes you to continue and
+you must output the exact remaining part, picking up mid-word if needed. End a task turn only
+with the final result, or with 'ГОТОВО:' plus a summary when everything is already done.
 """
 
 APPROVAL_TOOL_SCHEMA: dict[str, Any] = {
@@ -144,6 +146,14 @@ CONTINUE_PUSH = (
     " for permission and do not ask questions - use the tools and finish the whole task"
     " yourself. Only when everything is truly done, start your reply with 'ГОТОВО:'"
     " followed by a short final summary."
+)
+TRUNCATE_PUSH = (
+    "Your previous reply was cut off by the output length limit. Continue seamlessly"
+    " from the exact point where it stopped - do not repeat or rephrase anything,"
+    " just output the remaining part. If it gets cut again, keep going from there;"
+    " you will be pushed to continue until the task is complete."
+    " Only when the whole task is truly done, start your reply with 'ГОТОВО:'"
+    " followed by a short summary."
 )
 
 
@@ -451,9 +461,10 @@ def run_turn(
             messages.append(assistant)
             if not response.get("tool_calls"):
                 text = (response.get("content") or "").strip()
-                if tools_used and pushes < continue_limit and not _is_done_marker(text):
+                truncated = response.get("stop_reason") == "length"
+                if (tools_used or truncated) and pushes < continue_limit and not _is_done_marker(text):
                     pushes += 1
-                    messages.append({"role": "user", "content": CONTINUE_PUSH})
+                    messages.append({"role": "user", "content": TRUNCATE_PUSH if truncated else CONTINUE_PUSH})
                     continue
                 return _strip_done_marker(text)
             for call in response["tool_calls"]:
