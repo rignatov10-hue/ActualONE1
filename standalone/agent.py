@@ -87,6 +87,11 @@ execute it step by step (search, read, edit, run, verify), fix what fails and re
 finishing. Keep working through tool calls until the task is fully done - the user sees each
 step live. Finish with one compact report: what was done, where, what to check. Never leave
 'manual steps for the user' when a tool can do them.
+AUTONOMY - never stop mid-task: do not end your turn with partial work, with 'I can continue',
+or with a question like 'should I continue?' when you can just do it. Keep going until the
+whole task is complete; the system will push you to continue if you stop early - then comply
+by continuing the actual work, not by chatting about it. End a task turn only with the final
+result, or with 'ГОТОВО:' plus a summary when everything is already done.
 """
 
 APPROVAL_TOOL_SCHEMA: dict[str, Any] = {
@@ -133,6 +138,35 @@ SUMMARY_INSTRUCTION = (
 SUMMARY_AFTER = 40
 SUMMARY_KEEP = 12
 DEFAULT_MAX_STEPS = max(1, int(os.environ.get("ANALYST_MAX_STEPS", "32")))
+DONE_MARKERS = ("ГОТОВО", "DONE:", "TASK COMPLETE")
+CONTINUE_PUSH = (
+    "The task is not complete: continue exactly where you stopped. Do not ask the user"
+    " for permission and do not ask questions - use the tools and finish the whole task"
+    " yourself. Only when everything is truly done, start your reply with 'ГОТОВО:'"
+    " followed by a short final summary."
+)
+
+
+def _auto_continue_limit() -> int:
+    raw = os.environ.get("ANALYST_AUTO_CONTINUE", "4").strip()
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        return 4
+
+
+def _is_done_marker(text: str) -> bool:
+    head = text.strip().upper()
+    return any(head.startswith(marker) for marker in DONE_MARKERS)
+
+
+def _strip_done_marker(text: str) -> str:
+    stripped = text.strip()
+    for marker in DONE_MARKERS:
+        if stripped.upper().startswith(marker):
+            rest = stripped[len(marker) :].lstrip(": ").strip()
+            return rest or stripped
+    return stripped
 
 
 class TurnCancelled(Exception):
@@ -397,6 +431,9 @@ def run_turn(
     if facts:
         instructions += facts_section(facts)
     messages = conv.model_messages()
+    tools_used = False
+    pushes = 0
+    continue_limit = _auto_continue_limit()
 
     def _delta(text: str) -> None:
         if _cancel_event.is_set():
@@ -413,8 +450,14 @@ def run_turn(
             conv.append(assistant)
             messages.append(assistant)
             if not response.get("tool_calls"):
-                return response.get("content") or ""
+                text = (response.get("content") or "").strip()
+                if tools_used and pushes < continue_limit and not _is_done_marker(text):
+                    pushes += 1
+                    messages.append({"role": "user", "content": CONTINUE_PUSH})
+                    continue
+                return _strip_done_marker(text)
             for call in response["tool_calls"]:
+                tools_used = True
                 if _cancel_event.is_set():
                     raise TurnCancelled()
                 content = _execute(conv, call, step)

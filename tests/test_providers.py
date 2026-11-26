@@ -92,7 +92,7 @@ def test_deepseek_end_to_end_loop(api_server, tmp_path):
                 }
             ]
         },
-        {"choices": [{"message": {"content": "Столбцы такие"}}]},
+        {"choices": [{"message": {"content": "ГОТОВО: Столбцы такие"}}]},
     ]
     client = llm.OpenAICompatClient("deepseek-chat", base, "test-key")
     from standalone import memory
@@ -116,7 +116,7 @@ def test_claude_end_to_end_loop(api_server, tmp_path):
             ],
             "stop_reason": "tool_use",
         },
-        {"content": [{"type": "text", "text": "Вот ответ"}], "stop_reason": "end_turn"},
+        {"content": [{"type": "text", "text": "ГОТОВО: Вот ответ"}], "stop_reason": "end_turn"},
     ]
     client = llm.AnthropicClient("claude-sonnet-4-5", "test-key", base)
     from standalone import memory

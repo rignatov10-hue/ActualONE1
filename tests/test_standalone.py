@@ -221,7 +221,7 @@ def test_skills_end_to_end_with_loop(mock_server: str, tmp_path: Path, monkeypat
                 }
             ]
         },
-        {"choices": [{"message": {"content": "VERIFIED"}}]},
+        {"choices": [{"message": {"content": "ГОТОВО: VERIFIED"}}]},
     ]
     answer = agent_mod.run_turn(conv, client, "Enable the check skill.")
     assert answer == "VERIFIED"
@@ -274,7 +274,7 @@ def test_openai_loop_end_to_end_and_memory(mock_server: str, tmp_path: Path):
                 }
             ]
         },
-        {"choices": [{"message": {"content": "EU has 2 rows with cost 40 in total."}}]},
+        {"choices": [{"message": {"content": "ГОТОВО: EU has 2 rows with cost 40 in total."}}]},
     ]
     answer = agent_mod.run_turn(conv, client, "Load my data and tell me about EU costs.")
     assert answer == "EU has 2 rows with cost 40 in total."
@@ -321,7 +321,7 @@ def test_error_tool_result_reaches_model(mock_server: str, tmp_path: Path):
                 }
             ]
         },
-        {"choices": [{"message": {"content": "There is no column 'nope'; available: region, revenue, units, active."}}]},
+        {"choices": [{"message": {"content": "ГОТОВО: There is no column 'nope'; available: region, revenue, units, active."}}]},
     ]
     answer = agent_mod.run_turn(conversation, client, "Group by nope")
     assert "nope" in answer
@@ -344,7 +344,7 @@ def test_anthropic_wire_format(mock_server: str, tmp_path: Path):
                 {"type": "tool_use", "id": "toolu_1", "name": "describe_columns", "input": {}},
             ]
         },
-        {"content": [{"type": "text", "text": "5 rows across 5 columns."}]},
+        {"content": [{"type": "text", "text": "ГОТОВО: 5 rows across 5 columns."}]},
     ]
     client = llm.AnthropicClient("claude-test", "key", base_url=mock_server)
     conv = memory.Conversation("anth", tmp_path)
