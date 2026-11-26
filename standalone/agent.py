@@ -168,6 +168,17 @@ CONTINUATION_NOTE = (
     " already written - continue seamlessly from the exact point where the text stopped,"
     " even mid-sentence or mid-word, and output only the missing remainder."
 )
+LITE_INSTRUCTIONS = (
+    "You are ActualONE, a capable assistant with persistent memory. Answer in the"
+    " user's language, directly and to the point. When asked for a text, deliver the"
+    " whole finished text at once - never placeholders, never 'should I continue?'."
+    " Be concrete, natural and human."
+)
+
+
+def _lite_mode() -> bool:
+    """ANALYST_LITE=1: minimal system prompt and no tool schemas (best for small local models)."""
+    return os.environ.get("ANALYST_LITE", "").strip().lower() in {"1", "true", "yes", "on", "да", "вкл"}
 
 
 def _auto_continue_limit() -> int:
@@ -444,8 +455,12 @@ def run_turn(
     _cancel_event.clear()
     conv.append({"role": "user", "content": user_text, "time": utc_now()})
     instructions, schemas = _system_state()
-    schemas.append(knowledge_mod.KNOWLEDGE_TOOL_SCHEMA)
-    instructions += knowledge_mod.KNOWLEDGE_SECTION
+    if _lite_mode():
+        instructions = LITE_INSTRUCTIONS
+        schemas = []
+    else:
+        schemas.append(knowledge_mod.KNOWLEDGE_TOOL_SCHEMA)
+        instructions += knowledge_mod.KNOWLEDGE_SECTION
     if clear_continuation_flag(conv):
         instructions += CONTINUATION_NOTE
     _maybe_summarize(conv, client)

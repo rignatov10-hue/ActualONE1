@@ -252,3 +252,29 @@ def test_delete_conversation_removes_flag(conv: memory.Conversation):
     memory.set_continuation_flag(conv)
     assert memory.delete_conversation(conv.root, conv.name) is True
     assert not memory.has_continuation_flag(conv)
+
+
+def test_lite_mode_strips_tools_and_instructions(conv: memory.Conversation, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("ANALYST_LITE", "1")
+    client = Script([{"content": "ГОТОВО: чистый ответ"}])
+    systems: list[str] = []
+    original = client.complete
+
+    def recording(system, messages, schemas, on_delta=None):
+        systems.append(system)
+        return original(system, messages, schemas, on_delta)
+
+    client.complete = recording
+    answer = agent_mod.run_turn(conv, client, "напиши текст")
+    assert answer == "чистый ответ"
+    assert systems[0].startswith("You are ActualONE")
+    assert len(systems[0]) < 1000
+    assert "tool" not in str(client.calls[0][-1]) or client.calls[0][-1]["role"] != "tool"
+    assert agent_mod._lite_mode()
+
+
+def test_lite_mode_off_keeps_tools(conv: memory.Conversation, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.delenv("ANALYST_LITE", raising=False)
+    assert not agent_mod._lite_mode()
+    _, schemas = agent_mod._system_state()
+    assert len(schemas) >= 5

@@ -295,9 +295,15 @@ class SettingsFrame(ttk.Frame):
             text="БЕЗ ПОДТВЕРЖДЕНИЙ // выполнять действия сразу (авто-Да, всё в журнале)",
             variable=self.no_confirm_var,
         ).grid(row=google_row + 3, column=0, columnspan=3, sticky=W, pady=(2, 6))
+        self.lite_var = tk.BooleanVar(value=str(stored.get("lite_mode")) == "1")
+        ttk.Checkbutton(
+            self,
+            text="ЛЁГКИЙ РЕЖИМ // чистый чат без инструментов — для локальных моделей на слабом ПК",
+            variable=self.lite_var,
+        ).grid(row=google_row + 4, column=0, columnspan=3, sticky=W, pady=(2, 6))
 
         start = ttk.Button(self, text=">>  ЗАПУСТИТЬ", style="Accent.TButton", command=self._start)
-        start.grid(row=google_row + 4, column=0, columnspan=3, pady=(18, 8))
+        start.grid(row=google_row + 5, column=0, columnspan=3, pady=(18, 8))
         self.columnconfigure(1, weight=1)
         self._update_hint()
 
@@ -370,6 +376,8 @@ class SettingsFrame(ttk.Frame):
         config = self.values()
         config["pc_tools"] = "1" if self.pc_var.get() else ""
         config["pc_no_confirm"] = "1" if self.no_confirm_var.get() else ""
+        config["lite_mode"] = "1" if self.lite_var.get() else ""
+        os.environ["ANALYST_LITE"] = config["lite_mode"]
         save_config(config)
         try:
             client = make_client(config)
