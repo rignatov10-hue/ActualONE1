@@ -23,7 +23,14 @@ from . import knowledge as knowledge_mod
 from . import pc as pc_mod
 from . import vm as vm_mod
 from .llm import AnthropicClient, OpenAICompatClient
-from .memory import Conversation, facts_section, load_facts, save_fact
+from .memory import (
+    Conversation,
+    clear_continuation_flag,
+    facts_section,
+    load_facts,
+    save_fact,
+    set_continuation_flag,
+)
 from .pc import PCError
 from .skills import (
     SKILL_TOOL_SCHEMA,
@@ -154,6 +161,12 @@ TRUNCATE_PUSH = (
     " you will be pushed to continue until the task is complete."
     " Only when the whole task is truly done, start your reply with 'ГОТОВО:'"
     " followed by a short summary."
+)
+CONTINUATION_NOTE = (
+    "NOTE: your previous reply in this dialog was cut off by the output length limit"
+    " and the user asks you to continue it. Do NOT rewrite or repeat anything that was"
+    " already written - continue seamlessly from the exact point where the text stopped,"
+    " even mid-sentence or mid-word, and output only the missing remainder."
 )
 
 
@@ -433,6 +446,8 @@ def run_turn(
     instructions, schemas = _system_state()
     schemas.append(knowledge_mod.KNOWLEDGE_TOOL_SCHEMA)
     instructions += knowledge_mod.KNOWLEDGE_SECTION
+    if clear_continuation_flag(conv):
+        instructions += CONTINUATION_NOTE
     _maybe_summarize(conv, client)
     summary = conv.latest_summary()
     if summary:
@@ -444,6 +459,7 @@ def run_turn(
     tools_used = False
     pushes = 0
     continue_limit = _auto_continue_limit()
+    truncated_parts: list[str] = []
 
     def _delta(text: str) -> None:
         if _cancel_event.is_set():
@@ -463,10 +479,16 @@ def run_turn(
                 text = (response.get("content") or "").strip()
                 truncated = response.get("stop_reason") == "length"
                 if (tools_used or truncated) and pushes < continue_limit and not _is_done_marker(text):
+                    if truncated:
+                        truncated_parts.append(response.get("content") or "")
                     pushes += 1
                     messages.append({"role": "user", "content": TRUNCATE_PUSH if truncated else CONTINUE_PUSH})
                     continue
-                return _strip_done_marker(text)
+                final = _strip_done_marker(text)
+                if truncated:
+                    set_continuation_flag(conv)
+                    final = "".join(truncated_parts) + final
+                return final
             for call in response["tool_calls"]:
                 tools_used = True
                 if _cancel_event.is_set():

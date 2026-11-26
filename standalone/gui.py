@@ -760,8 +760,16 @@ class ChatWindow(ttk.Frame):
             return
         if status == "ok":
             shown = self._stream_close()
-            if message and message.strip() and message.strip() != shown.strip():
-                self._append_line("Агент", message)
+            msg = (message or "").strip()
+            prefix = shown.strip()
+            if msg and msg != prefix:
+                if prefix and msg.startswith(prefix):
+                    rest = msg[len(prefix):]
+                    if rest.strip():
+                        self._append_line("Агент", rest)
+                elif not (prefix and prefix.startswith(msg)):
+                    # всё, что стримилось, уже на экране (например, пометка «ГОТОВО:» снята)
+                    self._append_line("Агент", message)
         elif status == "activity":
             self._append_line("Система", message, color="#666")
             self.after(100, self._poll)

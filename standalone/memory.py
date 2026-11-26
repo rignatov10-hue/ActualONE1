@@ -17,6 +17,7 @@ import os
 import re
 from pathlib import Path
 from typing import Any
+from typing import Any
 
 import pandas as pd
 
@@ -256,12 +257,49 @@ def search_conversations(
     return results
 
 
+CONTINUATION_SUFFIX = ".cont"
+
+
+def _continuation_path(conv: Any) -> Path:
+    return Path(conv.history_path).with_suffix(CONTINUATION_SUFFIX)
+
+
+def set_continuation_flag(conv: Any) -> None:
+    """Remember that the last assistant reply of this dialog was cut off mid-text."""
+    try:
+        path = _continuation_path(conv)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("1", encoding="utf-8")
+    except OSError:
+        pass
+
+
+def clear_continuation_flag(conv: Any) -> bool:
+    """Drop the continuation marker; True when it was present."""
+    path = _continuation_path(conv)
+    try:
+        if path.exists():
+            path.unlink()
+            return True
+    except OSError:
+        pass
+    return False
+
+
+def has_continuation_flag(conv: Any) -> bool:
+    try:
+        return _continuation_path(conv).exists()
+    except OSError:
+        return False
+
+
 def delete_conversation(root: Path | str | None, name: str) -> bool:
     """Remove a conversation's history and dataset files; True when anything was deleted."""
     root = Path(root or MEMORY_ROOT).resolve()
     clean = safe_name(name)
     removals = (
         root / "conversations" / f"{clean}.jsonl",
+        root / "conversations" / f"{clean}.cont",
         root / "datasets" / f"{clean}.parquet",
         root / "datasets" / f"{clean}.meta.json",
         root / "datasets" / f"{clean}.scope.parquet",

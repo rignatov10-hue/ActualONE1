@@ -201,3 +201,54 @@ def test_openai_finish_reason_stop_maps_to_end_turn():
     finally:
         urllib.request.urlopen = orig
     assert result["stop_reason"] == "end_turn"
+
+
+def test_continuation_flag_persists_note_for_next_turn(conv: memory.Conversation, monkeypatch: pytest.MonkeyPatch):
+    """When pushes run out mid-truncation the next turn continues, not repeats."""
+    monkeypatch.setenv("ANALYST_AUTO_CONTINUE", "1")
+    client = Script(
+        [
+            {"content": "часть один ", "stop_reason": "length"},
+            {"content": "часть два", "stop_reason": "length"},
+        ]
+    )
+    answer = agent_mod.run_turn(conv, client, "напиши текст")
+    assert answer == "часть один часть два"
+    assert memory.has_continuation_flag(conv)
+
+    client2 = Script([{"content": "и финальный хвост"}])
+    client2.systems = []
+
+    original_complete = client2.complete
+
+    def recording_complete(system, messages, schemas, on_delta=None):
+        client2.systems.append(system)
+        return original_complete(system, messages, schemas, on_delta)
+
+    client2.complete = recording_complete
+    answer2 = agent_mod.run_turn(conv, client2, "пиши дальше")
+    assert answer2 == "и финальный хвост"
+    assert "output length limit" in client2.systems[0]
+    assert not memory.has_continuation_flag(conv)
+
+
+def test_continuation_flag_cleared_even_on_unrelated_turn(conv: memory.Conversation):
+    memory.set_continuation_flag(conv)
+    client = Script([{"content": "обычный ответ"}])
+    answer = agent_mod.run_turn(conv, client, "привет")
+    assert answer == "обычный ответ"
+    assert not memory.has_continuation_flag(conv)
+
+
+def test_truncated_final_without_pushes_sets_flag(conv: memory.Conversation, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("ANALYST_AUTO_CONTINUE", "0")
+    client = Script([{"content": "обрыв посреди", "stop_reason": "length"}])
+    answer = agent_mod.run_turn(conv, client, "напиши текст")
+    assert answer == "обрыв посреди"
+    assert memory.has_continuation_flag(conv)
+
+
+def test_delete_conversation_removes_flag(conv: memory.Conversation):
+    memory.set_continuation_flag(conv)
+    assert memory.delete_conversation(conv.root, conv.name) is True
+    assert not memory.has_continuation_flag(conv)
