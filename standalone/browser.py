@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import os
 import time
+from pathlib import Path
 from typing import Any
 
 from .pc import PCError, _audit, smart_path
@@ -35,7 +36,18 @@ def _headed() -> bool:
     return os.environ.get("ANALYST_BROWSER_HEADED", "").strip().lower() in {"1", "true", "yes", "on", "да", "вкл"}
 
 
-def _page() -> Any:
+def _profile_dir(conv: Any) -> Path:
+    """Persistent Chromium profile dir so logins and cookies survive restarts."""
+    override = os.environ.get("ANALYST_BROWSER_PROFILE", "").strip()
+    if override:
+        return Path(override)
+    try:
+        return Path(conv.root).parent / "browser_profile"
+    except Exception:
+        return Path("browser_profile").resolve()
+
+
+def _page(conv: Any = None) -> Any:
     page = _state.get("page")
     if page is not None:
         return page
@@ -47,10 +59,18 @@ def _page() -> Any:
             " pip install playwright && playwright install chromium"
         ) from exc
     pw = sync_playwright().start()
-    browser = pw.chromium.launch(headless=not _headed())
-    context = browser.new_context(viewport={"width": 1280, "height": 800})
-    page = context.new_page()
-    _state.update({"pw": pw, "browser": browser, "page": page})
+    profile = _profile_dir(conv)
+    try:
+        profile.mkdir(parents=True, exist_ok=True)
+        context = pw.chromium.launch_persistent_context(
+            str(profile), headless=not _headed(), viewport={"width": 1280, "height": 800}
+        )
+        browser_obj = None
+    except Exception:
+        browser_obj = pw.chromium.launch(headless=not _headed())
+        context = browser_obj.new_context(viewport={"width": 1280, "height": 800})
+    page = context.pages[0] if getattr(context, "pages", None) else context.new_page()
+    _state.update({"pw": pw, "browser": browser_obj, "context": context, "page": page})
     return page
 
 
@@ -58,6 +78,8 @@ def _stop() -> None:
     try:
         if _state.get("browser"):
             _state["browser"].close()
+        if _state.get("context"):
+            _state["context"].close()
         if _state.get("pw"):
             _state["pw"].stop()
     except Exception:
@@ -85,7 +107,7 @@ def browser_open(conv: Any, url: str, max_chars: int = DEFAULT_SNIPPET_CHARS) ->
         limit = max(500, min(int(max_chars), MAX_SNIPPET_CHARS))
     except (TypeError, ValueError):
         limit = DEFAULT_SNIPPET_CHARS
-    page = _page()
+    page = _page(conv)
     try:
         page.goto(clean, wait_until="domcontentloaded", timeout=30000)
     except Exception as exc:
@@ -103,7 +125,7 @@ def browser_click(conv: Any, target: str) -> dict[str, Any]:
     clean = (target or "").strip()
     if not clean:
         raise PCError("Empty click target; use a CSS selector, 'text=...' or '#' + element index from browser_snapshot.")
-    page = _page()
+    page = _page(conv)
     try:
         page.locator(clean).first.click(timeout=8000)
     except Exception as exc:
@@ -117,7 +139,7 @@ def browser_type(conv: Any, target: str, text: str, press_enter: bool = False) -
     clean = (target or "").strip()
     if not clean:
         raise PCError("Empty input target; use a CSS selector, 'text=...' or '#' + element index from browser_snapshot.")
-    page = _page()
+    page = _page(conv)
     try:
         field = page.locator(clean).first
         field.fill("")
@@ -136,7 +158,7 @@ def browser_snapshot(conv: Any, max_chars: int = DEFAULT_SNIPPET_CHARS) -> dict[
         limit = max(500, min(int(max_chars), MAX_SNIPPET_CHARS))
     except (TypeError, ValueError):
         limit = DEFAULT_SNIPPET_CHARS
-    page = _page()
+    page = _page(conv)
     links = page.eval_on_selector_all(
         "a", "els => els.slice(0, 40).map((e, i) => ({n: i, text: (e.textContent || '').trim().slice(0, 80), href: e.href}))"
     )
@@ -165,7 +187,7 @@ def browser_screenshot(conv: Any, path: str = "") -> dict[str, Any]:
     if target.suffix.lower() != ".png":
         target = target.with_suffix(".png")
     target.parent.mkdir(parents=True, exist_ok=True)
-    page = _page()
+    page = _page(conv)
     try:
         page.screenshot(path=str(target), full_page=False)
     except Exception as exc:
@@ -263,4 +285,8 @@ browser_type (selectors like 'text=Sign in', '#login', '//input[@name=\"q\"]') -
 the result -> browser_screenshot when the user may want proof. If Playwright is missing the
 tool returns an install hint - pass it to the user verbatim. Logins: type credentials only
 when the user provided them in this conversation; never send them anywhere else.
+Logins persist: the browser uses a saved profile (browser_profile folder next to the memory
+dir, override with ANALYST_BROWSER_PROFILE), so a site that was logged in once stays logged
+in across restarts. If a login check/captcha appears, ask the user to log in manually with
+ANALYST_BROWSER_HEADED=1 once - after that the session is saved.
 """

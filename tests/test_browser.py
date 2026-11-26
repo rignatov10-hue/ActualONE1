@@ -122,3 +122,15 @@ def test_browser_tools_registered_when_enabled(monkeypatch):
     for tool in browser.BROWSER_IMPLS:
         assert tool in names
     assert "browser_snapshot (find selectors)" in instructions
+
+
+def test_profile_dir_env_override(monkeypatch, tmp_path):
+    target = tmp_path / "prof"
+    monkeypatch.setenv("ANALYST_BROWSER_PROFILE", str(target))
+    assert browser._profile_dir(None) == target
+
+
+def test_profile_dir_default_next_to_memory(tmp_path):
+    conv = memory.Conversation("p", tmp_path / "mem").load()
+    result = browser._profile_dir(conv)
+    assert result == tmp_path / "browser_profile"
